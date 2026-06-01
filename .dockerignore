@@ -1,0 +1,14 @@
+.git
+.venv
+.venv-*
+.venv_*
+.venv-win
+__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+data
+logs
+.env
+api.log
+tmp_*

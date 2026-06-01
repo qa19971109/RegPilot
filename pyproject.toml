@@ -1,0 +1,32 @@
+[project]
+name = "regpilot"
+version = "0.1.0"
+description = "RegPilot account registration flow runner"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "requests>=2.32.0",
+  "curl-cffi>=0.15.0",
+  "fastapi>=0.136.0",
+  "uvicorn>=0.47.0",
+  "pydantic>=2.13.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+]
+
+[project.scripts]
+regpilot = "regpilot.cli:main"
+regpilot-api = "regpilot.api:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
