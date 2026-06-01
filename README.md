@@ -26,20 +26,190 @@ Implemented capabilities:
 - CPA callback submission and account import helpers
 - Existing account reauthorization with email OTP and optional phone verification
 
-## Install
+## Installation
+
+RegPilot supports Python 3.11+ on Windows, Linux, and macOS. Python 3.12 is recommended because the Docker image and current runtime use it.
+
+### Requirements
+
+- Python 3.11 or newer
+- Git
+- Network access to the configured mail/SMS/CPA services
+- Optional: Docker and Docker Compose for container deployment
+
+### Windows PowerShell
+
+```powershell
+git clone https://github.com/ywddd/RegPilot.git
+cd RegPilot
+
+py -3.12 -m venv .venv-win
+.\.venv-win\Scripts\Activate.ps1
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -e .
+```
+
+Start the API:
+
+```powershell
+$env:REGPILOT_HOST="0.0.0.0"
+$env:REGPILOT_PORT="8766"
+python -m regpilot.api --host $env:REGPILOT_HOST --port $env:REGPILOT_PORT
+```
+
+Run checks on Windows:
+
+```powershell
+$env:PYTHONPATH="src"
+.\.venv-win\Scripts\python.exe -m compileall -q src tests
+.\.venv-win\Scripts\python.exe -m unittest discover -s tests -p "test*.py"
+```
+
+If PowerShell blocks venv activation, run:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+Then open a new PowerShell window and activate the virtual environment again.
+
+### Linux
 
 ```bash
-cd /path/to/RegPilot
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
+git clone https://github.com/ywddd/RegPilot.git
+cd RegPilot
+
+python3.12 -m venv .venv-linux312 || python3 -m venv .venv-linux
+source .venv-linux312/bin/activate 2>/dev/null || source .venv-linux/bin/activate
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -e .
 ```
+
+Start the API:
+
+```bash
+REGPILOT_HOST=0.0.0.0 REGPILOT_PORT=8766 python -m regpilot.api --host 0.0.0.0 --port 8766
+```
+
+Or use the bundled scripts:
+
+```bash
+scripts/api.sh
+scripts/manage-api.sh start
+scripts/manage-api.sh status
+```
+
+### macOS
+
+Install Python with Homebrew if needed:
+
+```bash
+brew install python@3.12 git
+```
+
+Then install RegPilot:
+
+```bash
+git clone https://github.com/ywddd/RegPilot.git
+cd RegPilot
+
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -e .
+```
+
+Start the API:
+
+```bash
+REGPILOT_HOST=0.0.0.0 REGPILOT_PORT=8766 python -m regpilot.api --host 0.0.0.0 --port 8766
+```
+
+### Development Install
 
 For development/test tools:
 
 ```bash
-pip install -e '.[dev]'
+python -m pip install -e '.[dev]'
 ```
+
+Run the full check script on Linux/macOS:
+
+```bash
+scripts/check.sh
+```
+
+### Docker Compose
+
+Docker is the simplest production-style install. Runtime data is stored in `./data` and logs in `./logs`; both are ignored by Git.
+
+```bash
+git clone https://github.com/ywddd/RegPilot.git
+cd RegPilot
+
+mkdir -p data logs
+docker compose up -d --build
+```
+
+Check status:
+
+```bash
+docker compose ps
+curl http://127.0.0.1:8766/api/health
+```
+
+Open the WebUI:
+
+```text
+http://127.0.0.1:8766/
+```
+
+To use a different port:
+
+```bash
+REGPILOT_PORT=8877 docker compose up -d --build
+```
+
+When changing environment variables or source files in Docker, rebuild/recreate the container:
+
+```bash
+docker compose up -d --build
+```
+
+### Upgrade
+
+For a Python virtual environment install:
+
+```bash
+git pull
+source .venv/bin/activate
+python -m pip install -e .
+```
+
+On Windows:
+
+```powershell
+git pull
+.\.venv-win\Scripts\Activate.ps1
+python -m pip install -e .
+```
+
+For Docker:
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+### Runtime Files
+
+These paths are runtime state and should not be committed:
+
+- `data/`
+- `logs/`
+- `reports/`
+- `backups/`
+- `.env`
 
 ## CLI Usage
 
@@ -78,7 +248,7 @@ The API scripts support these environment variables:
 
 ## Config Example
 
-CPA settings use the existing `codex2api_*` config keys for compatibility with the running WebUI and stored NAS config.
+CPA settings use the existing `codex2api_*` config keys for compatibility with the running WebUI and stored config.
 
 ```json
 {
