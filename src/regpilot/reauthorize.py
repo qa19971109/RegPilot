@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from .accounts_store import get_account, save_registration_result_to_account, upsert_account
 from .config import DATA_DIR, MailConfig, RegisterConfig
+from .json_store import write_json_atomic
 from .register_core import PlatformRegistrar, RegistrationResult, auth_base, wait_for_code, _response_json, extract_oauth_callback_params_from_consent_session, get_common_headers, _make_trace_headers, _registration_state_from_info, _decode_jwt_payload, build_sentinel_token, _random_name, _random_birthdate, _about_you_shape_log_summary, _accounts_error_code
 from .oauth_token_flow import (
     HeroSMSConfig,
@@ -1419,7 +1420,7 @@ def _save_phone_reuse_pool(data: dict[str, Any]) -> None:
     path = _phone_reuse_pool_path()
     payload = data if isinstance(data, dict) else {"items": []}
     payload.setdefault("items", [])
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_json_atomic(path, payload)
 
 
 def _phone_pool_key(config: HeroSMSConfig, activation_id: str) -> str:

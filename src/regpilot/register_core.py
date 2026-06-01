@@ -27,6 +27,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from .config import DATA_DIR, RegisterConfig, parse_bool
+from .json_store import write_json_atomic, write_text_atomic
 from .logging_utils import log
 from . import mail_provider
 
@@ -1920,7 +1921,7 @@ def exchange_platform_tokens(session: requests.Session, device_id: str, code_ver
 def save_result(result: RegistrationResult) -> Path:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     path = DATA_DIR / "last_result.json"
-    path.write_text(json.dumps(asdict(result), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_json_atomic(path, asdict(result))
     return path
 
 
@@ -1954,9 +1955,9 @@ def _save_about_you_failure_artifacts(
         "create_info": create_info or {},
         "page_snapshot": page_snapshot or {},
     }
-    json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_json_atomic(json_path, payload)
     if html_text:
-        html_path.write_text(html_text, encoding="utf-8")
+        write_text_atomic(html_path, html_text)
     return {
         "json_path": str(json_path),
         "html_path": str(html_path) if html_text else "",
@@ -1989,9 +1990,9 @@ def _save_about_you_presubmit_artifacts(
         "state": state or {},
         "page_snapshot": page_snapshot or {},
     }
-    json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_json_atomic(json_path, payload)
     if html_text:
-        html_path.write_text(html_text, encoding="utf-8")
+        write_text_atomic(html_path, html_text)
     return {
         "json_path": str(json_path),
         "html_path": str(html_path) if html_text else "",

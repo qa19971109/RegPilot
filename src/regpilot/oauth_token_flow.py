@@ -15,6 +15,7 @@ import requests
 
 from . import mail_provider
 from .config import DATA_DIR
+from .json_store import write_json_atomic
 from .register_core import (
     RegistrationResult,
     PlatformRegistrar,
@@ -551,14 +552,14 @@ def build_account_archive(
 def save_sub2api_export(payload: dict[str, Any], filename: str = DEFAULT_SUB2API_EXPORT_NAME) -> Path:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     path = DATA_DIR / filename
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_json_atomic(path, payload)
     return path
 
 
 def save_account_archive(archive: dict[str, Any], filename: str = DEFAULT_ACCOUNT_ARCHIVE_NAME) -> Path:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     path = DATA_DIR / filename
-    path.write_text(json.dumps(archive, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_json_atomic(path, archive)
     return path
 
 
@@ -1300,6 +1301,30 @@ def _resolve_hero_sms_price_candidates_for_retry(config: HeroSMSConfig) -> list[
     return unique_sorted
 
 
+def _normalize_acquired_phone_number(phone_number: str) -> str:
+    text = str(phone_number or "").strip()
+    if text and not text.startswith("+"):
+        text = f"+{re.sub(r'[^0-9]', '', text)}"
+    return text
+
+
+def _activation_price_from_payload(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    for key in ("activationCost", "activation_cost", "price", "cost", "activationPrice", "activation_price"):
+        value = str(payload.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _activation_result(activation_id: str, phone_number: str, *, price: str = "") -> dict[str, str]:
+    result = {"activation_id": str(activation_id or "").strip(), "phone_number": _normalize_acquired_phone_number(phone_number)}
+    if price:
+        result["price"] = str(price).strip()
+    return result
+
+
 def acquire_hero_sms_phone(
     config: HeroSMSConfig,
     *,
@@ -1334,13 +1359,7 @@ def acquire_hero_sms_phone(
             if "no free phones" in lowered or "no numbers" in lowered or "not enough" in lowered:
                 raise RuntimeError(f"5sim_get_number_failed: NO_NUMBERS")
             raise RuntimeError(f"5sim_get_number_failed: {text[:300]}")
-        if not phone_number.startswith("+"):
-            phone_number = f"+{re.sub(r'[^0-9]', '', phone_number)}"
-        result = {"activation_id": activation_id, "phone_number": phone_number}
-        price = str((payload or {}).get("price") or (payload or {}).get("cost") or "").strip() if isinstance(payload, dict) else ""
-        if price:
-            result["price"] = price
-        return result
+        return _activation_result(activation_id, phone_number, price=_activation_price_from_payload(payload))
 
     params: dict[str, Any] = {
         "action": "getNumberV2" if _is_smsbower_config(config) else "getNumber",
@@ -1401,21 +1420,10 @@ def acquire_hero_sms_phone(
         raise RuntimeError(f"{_normalize_sms_provider(getattr(config, 'provider', 'hero_sms'))}_get_number_failed: {text[:300]}")
     activation_id = str(match.group(1) or "").strip()
     phone_number = str(match.group(2) or "").strip()
-    if not phone_number.startswith("+"):
-        phone_number = f"+{re.sub(r'[^0-9]', '', phone_number)}"
-    price = ""
-    if isinstance(payload, dict):
-        for key in ("activationCost", "activation_cost", "price", "cost", "activationPrice", "activation_price"):
-            value = str(payload.get(key) or "").strip()
-            if value:
-                price = value
-                break
+    price = _activation_price_from_payload(payload)
     if not price and (not _is_smsbower_config(config)) and price_limit is not None and price_limit > 0:
         price = f"≤{float(price_limit):.4f}"
-    result = {"activation_id": activation_id, "phone_number": phone_number}
-    if price:
-        result["price"] = price
-    return result
+    return _activation_result(activation_id, phone_number, price=price)
 
 
 def poll_hero_sms_code(
@@ -2682,7 +2690,7 @@ def _save_partial_hero_phone_bind_result(
         "note": str(note or "").strip(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_json_atomic(path, payload)
     return str(path)
 
 

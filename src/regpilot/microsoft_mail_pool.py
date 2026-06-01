@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import DATA_DIR, ensure_dirs
+from .json_store import write_json_atomic
 
 
 POOL_PATH = DATA_DIR / "microsoft_mail_pool.json"
@@ -72,7 +73,7 @@ def _read_unlocked() -> dict[str, Any]:
 
 def _write_unlocked(data: dict[str, Any]) -> None:
     ensure_dirs()
-    POOL_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_json_atomic(POOL_PATH, data)
 
 
 def list_accounts() -> list[dict[str, Any]]:

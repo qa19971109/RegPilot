@@ -2,17 +2,17 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import io
 import json
 import re
 import threading
 import time
-import traceback
-from contextlib import nullcontext, redirect_stderr, redirect_stdout
+from contextlib import nullcontext
 from typing import Any
 
 from .cli import load_config
 from .config import DATA_DIR, LOG_DIR, RegisterConfig, ensure_dirs, parse_bool
+from .job_runner import run_job as _run_job_impl
+from .json_store import write_json_atomic
 from .logging_utils import reset_log_context, set_log_context
 from .register_core import environment_profile_context, prepare_environment_profile_from_payload, run_placeholder, save_result, summarize_environment_profile, PlatformRegistrar, _random_birthdate, _random_name, _random_password, _exchange_registered_account_tokens, _about_you_shape_log_summary, _accounts_error_code
 from .oauth_token_flow import HeroSMSConfig, HERO_SMS_MAX_RETRY_COUNT, HERO_SMS_RELEASE_AFTER_SECONDS, HERO_SMS_RESEND_AFTER_SECONDS, SMSBOWER_BASE_URL, FIVESIM_BASE_URL, _continue_with_optional_add_email, _load_continue_page, _normalize_sms_provider, _probe_phone_signup_password_page, _resolve_oauth_callback, _save_partial_hero_phone_bind_result, _set_phone_flow_stage, _submit_about_you_form, acquire_hero_sms_phone, fetch_country_name_zh_map, fetch_hero_sms_countries, fetch_hero_sms_price_summary, fetch_hero_sms_quote_list, import_result_to_codex2api, poll_hero_sms_code, set_hero_sms_status
@@ -462,33 +462,6 @@ def _prune_job_logs() -> None:
         pass
 
 
-class _JobOutputStream(io.TextIOBase):
-    def __init__(self, job_id: str) -> None:
-        super().__init__()
-        self._job_id = job_id
-        self._buffer = ""
-        self._lock = threading.Lock()
-
-    def write(self, s: str) -> int:
-        JOBS.raise_if_stop_requested(self._job_id)
-        text = str(s or "")
-        if not text:
-            return 0
-        with self._lock:
-            self._buffer += text
-            while "\n" in self._buffer:
-                line, self._buffer = self._buffer.split("\n", 1)
-                JOBS.append_output(self._job_id, line + "\n")
-                JOBS.raise_if_stop_requested(self._job_id)
-        return len(text)
-
-    def flush(self) -> None:
-        with self._lock:
-            if self._buffer:
-                JOBS.append_output(self._job_id, self._buffer)
-                self._buffer = ""
-
-
 def _namespace(**values: Any) -> argparse.Namespace:
     return argparse.Namespace(**values)
 
@@ -559,7 +532,7 @@ def _webui_config_last_valid_path():
 def _write_last_valid_webui_config(config: dict[str, dict[str, Any]]) -> None:
     try:
         ensure_dirs()
-        _webui_config_last_valid_path().write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        write_json_atomic(_webui_config_last_valid_path(), config)
     except Exception:
         pass
 
@@ -695,7 +668,7 @@ def _save_webui_config(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
                 if key in candidate:
                     merged[section][key] = _sanitize_webui_config_value(key, candidate[key], defaults[key])
     ensure_dirs()
-    WEBUI_CONFIG_PATH.write_text(json.dumps(merged, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_json_atomic(WEBUI_CONFIG_PATH, merged)
     _write_last_valid_webui_config(merged)
     _invalidate_webui_config_cache()
     return merged
@@ -704,7 +677,7 @@ def _save_webui_config(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
 def _reset_webui_config() -> dict[str, dict[str, Any]]:
     merged = _apply_last_result_prefill(_clone_webui_config_defaults())
     ensure_dirs()
-    WEBUI_CONFIG_PATH.write_text(json.dumps(merged, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_json_atomic(WEBUI_CONFIG_PATH, merged)
     _write_last_valid_webui_config(merged)
     _invalidate_webui_config_cache()
     return merged
@@ -1025,61 +998,16 @@ def _safe_register_failure_summary(info: dict[str, Any]) -> str:
 
 
 def _run_job(kind: str, func, *args: Any, **kwargs: Any) -> dict[str, str]:
-    job_id = JOBS.create(kind)
-
-    def _job_output_text() -> str:
-        for job in JOBS.list():
-            if job.get("id") == job_id:
-                return str(job.get("output") or "")
-        return ""
-
-    def target() -> None:
-        stdout = _JobOutputStream(job_id)
-        log_tokens = set_log_context(task_id=job_id)
-        try:
-            JOBS.raise_if_stop_requested(job_id)
-            # stdout/stderr redirection is process-global, and OAuth state can be
-            # invalidated by concurrent CPA authorize flows. Run jobs one at a time.
-            locked = _JOB_EXECUTION_LOCK.acquire(blocking=False)
-            if not locked:
-                JOBS.append_output(job_id, "阶段：任务已排队，等待前一个任务完成\n")
-                _JOB_EXECUTION_LOCK.acquire()
-            try:
-                JOBS.raise_if_stop_requested(job_id)
-                JOBS.mark_running(job_id)
-                JOBS.append_output(job_id, "阶段：任务开始执行\n")
-                with redirect_stdout(stdout), redirect_stderr(stdout):
-                    result = func(*args, **kwargs)
-            finally:
-                _JOB_EXECUTION_LOCK.release()
-            stdout.flush()
-            JOBS.finish(job_id, result=result, output=_job_output_text())
-        except JobCancelledError as exc:
-            stdout.flush()
-            JOBS.finish(
-                job_id,
-                result={"ok": False, "stopped": True, "message": str(exc)},
-                error=None,
-                output=_job_output_text(),
-            )
-            with JOBS._lock:
-                job = JOBS._jobs.get(job_id)
-                if job:
-                    job["status"] = "stopped"
-                    job["finished_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-        except Exception as exc:
-            JOBS.append_output(job_id, f"阶段：任务失败：{_zh_task_error(exc)}\n")
-            stdout.flush()
-            JOBS.finish(
-                job_id,
-                error={"message": str(exc), "traceback": traceback.format_exc()},
-                output=_job_output_text(),
-            )
-        finally:
-            reset_log_context(log_tokens)
-
-    threading.Thread(target=target, daemon=True).start()
-    return {"ok": True, "job_id": job_id}
+    return _run_job_impl(
+        JOBS,
+        _JOB_EXECUTION_LOCK,
+        kind,
+        func,
+        *args,
+        error_translator=_zh_task_error,
+        cancelled_error_type=JobCancelledError,
+        **kwargs,
+    )
 
 
 def _run_register(payload: dict[str, Any]) -> dict[str, Any]:
