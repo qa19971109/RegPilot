@@ -132,13 +132,13 @@ class ReauthorizeAutoRequest(BaseModel):
     hero_sms_service: str = ""
     hero_sms_min_price: float | str = 0.0
     hero_sms_max_price: float | str = 0.0
-    hero_sms_wait_timeout: int = 60
-    hero_sms_wait_interval: int = 5
-    hero_sms_resend_after_seconds: int = 30
-    hero_sms_timeout_after_resend_seconds: int = 60
-    hero_sms_release_after_seconds: int = 120
-    hero_sms_auto_retry: bool | None = None
-    hero_sms_retry_count: int | None = None
+    sms_wait_timeout: int = 60
+    sms_wait_interval: int = 5
+    sms_resend_after_seconds: int = 30
+    sms_timeout_after_resend_seconds: int = 60
+    sms_release_after_seconds: int = 120
+    sms_auto_retry: bool | None = None
+    sms_retry_count: int | None = None
     allow_phone_verification: bool = False
 
 
@@ -299,14 +299,14 @@ def _merge_task_values(section: str, values: dict[str, Any]) -> dict[str, Any]:
         if value is not None:
             merged[str(key)] = value
     if storage_section == "hero_phone_bind":
-        if "hero_sms_auto_retry" not in explicit:
-            merged["hero_sms_auto_retry"] = _bool_for_values(merged, "hero_sms_auto_retry")
-        merged.setdefault("hero_sms_retry_count", 3)
-        merged.setdefault("hero_sms_wait_timeout", 60)
-        merged.setdefault("hero_sms_wait_interval", 5)
-        merged.setdefault("hero_sms_resend_after_seconds", 30)
-        merged.setdefault("hero_sms_timeout_after_resend_seconds", 60)
-        merged.setdefault("hero_sms_release_after_seconds", 120)
+        if "sms_auto_retry" not in explicit and "hero_sms_auto_retry" not in explicit:
+            merged["sms_auto_retry"] = _bool_for_values(merged, "sms_auto_retry", legacy_key="hero_sms_auto_retry")
+        merged.setdefault("sms_retry_count", 3)
+        merged.setdefault("sms_wait_timeout", 60)
+        merged.setdefault("sms_wait_interval", 5)
+        merged.setdefault("sms_resend_after_seconds", 30)
+        merged.setdefault("sms_timeout_after_resend_seconds", 60)
+        merged.setdefault("sms_release_after_seconds", 120)
     return merged
 
 
@@ -358,25 +358,25 @@ def _prefer_reauthorize_sms_values(payload: ReauthorizeAutoRequest) -> dict[str,
     else:
         api_key = api_key or hero_key
     bounds = {
-        "hero_sms_wait_timeout": pick("hero_sms_wait_timeout", 60),
-        "hero_sms_wait_interval": pick("hero_sms_wait_interval", 5),
-        "hero_sms_resend_after_seconds": pick("hero_sms_resend_after_seconds", 30),
-        "hero_sms_timeout_after_resend_seconds": pick("hero_sms_timeout_after_resend_seconds", 60),
-        "hero_sms_release_after_seconds": pick("hero_sms_release_after_seconds", 120),
-        "hero_sms_retry_count": pick("hero_sms_retry_count", 3),
+        "sms_wait_timeout": pick("sms_wait_timeout", pick("hero_sms_wait_timeout", 60)),
+        "sms_wait_interval": pick("sms_wait_interval", pick("hero_sms_wait_interval", 5)),
+        "sms_resend_after_seconds": pick("sms_resend_after_seconds", pick("hero_sms_resend_after_seconds", 30)),
+        "sms_timeout_after_resend_seconds": pick("sms_timeout_after_resend_seconds", pick("hero_sms_timeout_after_resend_seconds", 60)),
+        "sms_release_after_seconds": pick("sms_release_after_seconds", pick("hero_sms_release_after_seconds", 120)),
+        "sms_retry_count": pick("sms_retry_count", pick("hero_sms_retry_count", 3)),
         "hero_sms_min_price": pick("hero_sms_min_price", 0.0),
         "hero_sms_max_price": pick("hero_sms_max_price", 0.0),
     }
-    wait_timeout = _positive_int_for_values(bounds, "hero_sms_wait_timeout")
-    wait_interval = _positive_int_for_values(bounds, "hero_sms_wait_interval")
-    resend_after = _positive_int_for_values(bounds, "hero_sms_resend_after_seconds")
-    timeout_after_resend = _positive_int_for_values(bounds, "hero_sms_timeout_after_resend_seconds")
-    release_after = _positive_int_for_values(bounds, "hero_sms_release_after_seconds")
-    retry_count = _positive_int_for_values(bounds, "hero_sms_retry_count")
+    wait_timeout = _positive_int_for_values(bounds, "sms_wait_timeout")
+    wait_interval = _positive_int_for_values(bounds, "sms_wait_interval")
+    resend_after = _positive_int_for_values(bounds, "sms_resend_after_seconds")
+    timeout_after_resend = _positive_int_for_values(bounds, "sms_timeout_after_resend_seconds")
+    release_after = _positive_int_for_values(bounds, "sms_release_after_seconds")
+    retry_count = _positive_int_for_values(bounds, "sms_retry_count")
     min_price = _optional_float_for_values(bounds, "hero_sms_min_price")
     max_price = _optional_float_for_values(bounds, "hero_sms_max_price")
     if max_price > 0 and min_price > max_price:
-        raise HTTPException(status_code=400, detail="invalid_hero_sms_price_range")
+        raise HTTPException(status_code=400, detail="invalid_sms_price_range")
     return {
         "sms_provider": provider,
         "sms_api_key": api_key,
@@ -396,13 +396,16 @@ def _prefer_reauthorize_sms_values(payload: ReauthorizeAutoRequest) -> dict[str,
         ),
         "hero_sms_min_price": min_price,
         "hero_sms_max_price": max_price,
-        "hero_sms_wait_timeout": wait_timeout,
-        "hero_sms_wait_interval": wait_interval,
-        "hero_sms_resend_after_seconds": resend_after,
-        "hero_sms_timeout_after_resend_seconds": timeout_after_resend,
-        "hero_sms_release_after_seconds": release_after,
-        "hero_sms_auto_retry": _bool_for_values({"hero_sms_auto_retry": pick("hero_sms_auto_retry", False)}, "hero_sms_auto_retry"),
-        "hero_sms_retry_count": retry_count,
+        "sms_wait_timeout": wait_timeout,
+        "sms_wait_interval": wait_interval,
+        "sms_resend_after_seconds": resend_after,
+        "sms_timeout_after_resend_seconds": timeout_after_resend,
+        "sms_release_after_seconds": release_after,
+        "sms_auto_retry": _bool_for_values(
+            {"sms_auto_retry": pick("sms_auto_retry", pick("hero_sms_auto_retry", False))},
+            "sms_auto_retry",
+        ),
+        "sms_retry_count": retry_count,
     }
 
 
@@ -436,8 +439,10 @@ def _sms_provider_for_values(values: dict[str, Any]) -> str:
     raise HTTPException(status_code=400, detail="invalid_sms_provider")
 
 
-def _positive_int_for_values(values: dict[str, Any], key: str) -> int:
+def _positive_int_for_values(values: dict[str, Any], key: str, *, legacy_key: str = "") -> int:
     raw = values.get(key)
+    if raw in (None, "") and legacy_key:
+        raw = values.get(legacy_key)
     if raw in (None, ""):
         return 1
     if isinstance(raw, bool):
@@ -458,10 +463,15 @@ def _positive_int_for_values(values: dict[str, Any], key: str) -> int:
     return value
 
 
-def _optional_float_for_values(values: dict[str, Any], key: str) -> float:
+def _optional_float_for_values(values: dict[str, Any], key: str, *, legacy_key: str = "") -> float:
     raw = values.get(key)
     if raw in (None, ""):
-        return 0.0
+        if legacy_key:
+            raw = values.get(legacy_key)
+            if raw in (None, ""):
+                return 0.0
+        else:
+            return 0.0
     try:
         value = float(raw)
     except (TypeError, ValueError, OverflowError):
@@ -471,8 +481,10 @@ def _optional_float_for_values(values: dict[str, Any], key: str) -> float:
     return value
 
 
-def _bool_for_values(values: dict[str, Any], key: str) -> bool:
+def _bool_for_values(values: dict[str, Any], key: str, *, legacy_key: str = "") -> bool:
     raw = values.get(key)
+    if raw in (None, "") and legacy_key:
+        raw = values.get(legacy_key)
     if raw in (None, ""):
         return False
     if isinstance(raw, bool):
@@ -501,14 +513,14 @@ def _preflight_common_task_bounds(values: dict[str, Any]) -> None:
 
 def _preflight_phone_direct(values: dict[str, Any]) -> None:
     _preflight_common_task_bounds(values)
-    _positive_int_for_values(values, "hero_sms_wait_timeout")
-    _positive_int_for_values(values, "hero_sms_wait_interval")
-    _positive_int_for_values(values, "hero_sms_retry_count")
-    _bool_for_values(values, "hero_sms_auto_retry")
-    min_price = _optional_float_for_values(values, "hero_sms_min_price")
-    max_price = _optional_float_for_values(values, "hero_sms_max_price")
+    _positive_int_for_values(values, "sms_wait_timeout", legacy_key="hero_sms_wait_timeout")
+    _positive_int_for_values(values, "sms_wait_interval", legacy_key="hero_sms_wait_interval")
+    _positive_int_for_values(values, "sms_retry_count", legacy_key="hero_sms_retry_count")
+    _bool_for_values(values, "sms_auto_retry", legacy_key="hero_sms_auto_retry")
+    min_price = _optional_float_for_values(values, "sms_min_price", legacy_key="hero_sms_min_price")
+    max_price = _optional_float_for_values(values, "sms_max_price", legacy_key="hero_sms_max_price")
     if max_price > 0 and min_price > max_price:
-        raise HTTPException(status_code=400, detail="invalid_hero_sms_price_range")
+        raise HTTPException(status_code=400, detail="invalid_sms_price_range")
     if not _sms_api_key_for_values(values):
         raise HTTPException(status_code=400, detail="sms_api_key_required")
     if not _has_any_target_import(values):
@@ -521,13 +533,13 @@ def _preflight_hero_phone_bind(values: dict[str, Any]) -> None:
 
 def _preflight_sms_lookup(values: dict[str, Any]) -> None:
     _sms_provider_for_values(values)
-    _positive_int_for_values(values, "hero_sms_wait_timeout")
-    _positive_int_for_values(values, "hero_sms_wait_interval")
-    _bool_for_values(values, "hero_sms_auto_retry")
-    min_price = _optional_float_for_values(values, "hero_sms_min_price")
-    max_price = _optional_float_for_values(values, "hero_sms_max_price")
+    _positive_int_for_values(values, "sms_wait_timeout", legacy_key="hero_sms_wait_timeout")
+    _positive_int_for_values(values, "sms_wait_interval", legacy_key="hero_sms_wait_interval")
+    _bool_for_values(values, "sms_auto_retry", legacy_key="hero_sms_auto_retry")
+    min_price = _optional_float_for_values(values, "sms_min_price", legacy_key="hero_sms_min_price")
+    max_price = _optional_float_for_values(values, "sms_max_price", legacy_key="hero_sms_max_price")
     if max_price > 0 and min_price > max_price:
-        raise HTTPException(status_code=400, detail="invalid_hero_sms_price_range")
+        raise HTTPException(status_code=400, detail="invalid_sms_price_range")
     if not _sms_api_key_for_values(values):
         raise HTTPException(status_code=400, detail="sms_api_key_required")
 
@@ -719,7 +731,7 @@ async function queryCurrentSmsPrice(){try{setSmsHint('正在查询当前国家�
 function initPasswordToggles(){document.querySelectorAll('[data-toggle-password]').forEach(btn=>{btn.onclick=()=>{const el=$(btn.dataset.togglePassword); if(!el)return; const show=el.type==='password'; el.type=show?'text':'password'; btn.textContent=show?'隐藏':'显示'}})}
 function initRegisterProxyLayout(){const proxy=$('proxy'); const topRow=$('task_total')?.closest('.row'); const label=proxy?.closest('label'); if(!proxy||!topRow||!label||topRow.contains(proxy))return; topRow.classList.add('register-top-row'); topRow.appendChild(label)}
 function initCountrySearchLayout(){const select=$('hero_sms_country'); const search=$('hero_sms_country_search'); if(!select||!search||select.parentElement?.classList.contains('country-inline'))return; const wrap=document.createElement('div'); wrap.className='country-inline'; select.before(wrap); wrap.appendChild(select); wrap.appendChild(search)}
-function initRetryControls(){const hint=$('sms_country_hint'); if(!hint||$('hero_sms_auto_retry'))return; const row=document.createElement('div'); row.className='retry-row'; row.innerHTML='<label class="checkline"><input id="hero_sms_auto_retry" type="checkbox"><span>失败后自动重试换号</span></label><label>最大重试次数<input id="hero_sms_retry_count" type="number" min="1" max="20" value="3"></label>'; hint.before(row); if(!$('hero_sms_timeout_row')){const trow=document.createElement('div'); trow.className='retry-row'; trow.id='hero_sms_timeout_row'; trow.innerHTML='<label>整体等待超时(秒)<input id="hero_sms_wait_timeout" type="number" min="15" max="600" value="60" title="整轮接码等待的最大秒数"></label><label>轮询间隔(秒)<input id="hero_sms_wait_interval" type="number" min="1" max="30" value="5" title="查询最新短信的间隔"></label><label>等待多久后触发重发(秒)<input id="hero_sms_resend_after_seconds" type="number" min="1" max="300" value="30" title="等了这么久还没收到验证码就回调 on_resend"></label><label>重发后再等多久放弃(秒)<input id="hero_sms_timeout_after_resend_seconds" type="number" min="1" max="300" value="60" title="重发后超过这么久还没收到就超时"></label><label>兜底释放秒数(秒)<input id="hero_sms_release_after_seconds" type="number" min="15" max="600" value="120" title="达到此秒数强制释放号码"></label>'; row.after(trow)}}
+function initRetryControls(){const hint=$('sms_country_hint'); if(!hint||$('sms_auto_retry'))return; const row=document.createElement('div'); row.className='retry-row'; row.innerHTML='<label class="checkline"><input id="sms_auto_retry" type="checkbox"><span>失败后自动重试换号</span></label><label>最大重试次数<input id="sms_retry_count" type="number" min="1" max="20" value="3"></label>'; hint.before(row); if(!$('sms_timeout_row')){const trow=document.createElement('div'); trow.className='retry-row'; trow.id='sms_timeout_row'; trow.innerHTML='<label>整体等待超时(秒)<input id="sms_wait_timeout" type="number" min="15" max="600" value="60" title="整轮接码等待的最大秒数"></label><label>轮询间隔(秒)<input id="sms_wait_interval" type="number" min="1" max="30" value="5" title="查询最新短信的间隔"></label><label>等待多久后触发重发(秒)<input id="sms_resend_after_seconds" type="number" min="1" max="300" value="30" title="等了这么久还没收到验证码就回调 on_resend"></label><label>重发后再等多久放弃(秒)<input id="sms_timeout_after_resend_seconds" type="number" min="1" max="300" value="60" title="重发后超过这么久还没收到就超时"></label><label>兜底释放秒数(秒)<input id="sms_release_after_seconds" type="number" min="15" max="600" value="120" title="达到此秒数强制释放号码"></label>'; row.after(trow)}}
 function initExtraTaskControls(){const total=$('task_total'); const max=$('hero_sms_max_price'); const actions=max?.closest('.card')?.querySelector('.actions'); if(total&&!$('default_password')){const label=document.createElement('label'); label.innerHTML='默认密码<div class="password-field"><input id="default_password" type="password" placeholder="留空则随机生成"><button type="button" data-toggle-password="default_password">显示</button></div>'; total.closest('.row')?.appendChild(label)} if(max&&!$('hero_sms_min_price')){const label=document.createElement('label'); label.innerHTML='最低价<input id="hero_sms_min_price" placeholder="留空不限">'; max.closest('label')?.before(label)} if(actions&&!$('sms_price_button')){const btn=document.createElement('button'); btn.id='sms_price_button'; btn.type='button'; btn.textContent='查询当前国家价格'; btn.onclick=queryCurrentSmsPrice; actions.insertBefore(btn,actions.children[1]||null)}}
 function initEnvironmentControls(){return}
 function onMailProviderChange(){const type=val('task_mail_type')||'cloudflare-temp-email'; const isHotmail=type==='hotmail-api'; document.querySelectorAll('.mail-cloudflare-field').forEach(el=>el.classList.toggle('hidden',type!=='cloudflare-temp-email')); document.querySelectorAll('.mail-icloud-field').forEach(el=>el.classList.toggle('hidden',type!=='icloud')); $('icloud_cookies_path')?.closest('label')?.classList.add('hidden'); document.querySelectorAll('.mail-hotmail-field').forEach(el=>el.classList.toggle('hidden',!isHotmail)); document.querySelectorAll('.mail-hotmail-advanced').forEach(el=>el.classList.add('hidden')); const pool=$('microsoftMailPoolSection'); if(pool)pool.classList.toggle('hidden',!isHotmail)}
@@ -735,7 +747,7 @@ function accountStatusText(value){const map={active:'可用',authorized:'已授�
 function accountStatusClass(value){const raw=String(value||'').trim(); return raw.replace(/[^a-zA-Z0-9_-]/g,'')||'pending'}
 async function loadDefaults(){try{const c=await api('/api/config'); const r=(c.config&&c.config.register)||{}; const h=(c.config&&(c.config.phone_direct||c.config.hero_phone_bind))||{}; const provider=h.sms_provider||r.sms_provider||'hero_sms'; smsKeyCache.hero_sms=h.hero_sms_api_key||r.hero_sms_api_key||''; smsKeyCache.smsbower=h.smsbower_api_key||r.smsbower_api_key||''; if(provider==='smsbower'&&!smsKeyCache.smsbower){smsKeyCache.smsbower=h.sms_api_key||r.sms_api_key||''} if(provider==='hero_sms'&&!smsKeyCache.hero_sms){smsKeyCache.hero_sms=h.sms_api_key||r.sms_api_key||''} set('proxy',r.proxy||h.proxy||''); set('codex2api_url',r.codex2api_url||h.codex2api_url||''); set('codex2api_admin_key',r.codex2api_admin_key||h.codex2api_admin_key||''); set('codex2api_proxy_url',r.codex2api_proxy_url||h.codex2api_proxy_url||''); set('task_total',r.total||1); set('task_threads',r.threads||1); set('default_password',h.default_password||r.default_password||''); set('task_mail_type',r.mail_type||h.mail_type||'cloudflare-temp-email'); set('icloud_email',r.icloud_email||h.icloud_email||''); set('icloud_imap_user',r.icloud_imap_user||h.icloud_imap_user||''); set('icloud_imap_password',r.icloud_imap_password||h.icloud_imap_password||''); set('icloud_cookies_json',r.icloud_cookies_json||h.icloud_cookies_json||''); set('icloud_cookies_path',r.icloud_cookies_path||h.icloud_cookies_path||''); setSelectValue('icloud_host',r.icloud_host||h.icloud_host||'icloud.com'); set('icloud_hme_label',r.icloud_hme_label||h.icloud_hme_label||'RegPilot'); set('cf_temp_domain',r.cf_temp_domain||h.cf_temp_domain||''); set('cf_temp_base_url',r.cf_temp_base_url||h.cf_temp_base_url||''); set('cf_temp_admin_auth',r.cf_temp_admin_auth||h.cf_temp_admin_auth||''); set('hotmail_api_base_url',r.hotmail_api_base_url||h.hotmail_api_base_url||'http://127.0.0.1:17373'); set('hotmail_mailboxes',r.hotmail_mailboxes||h.hotmail_mailboxes||'INBOX,Junk'); set('hotmail_sender_filters',r.hotmail_sender_filters||h.hotmail_sender_filters||'openai,noreply,no-reply'); set('hotmail_subject_filters',r.hotmail_subject_filters||h.hotmail_subject_filters||'code,verification,验证码'); set('hotmail_required_keywords',r.hotmail_required_keywords||h.hotmail_required_keywords||''); setChecked('hotmail_alias_enabled',boolValue(h.hotmail_alias_enabled ?? r.hotmail_alias_enabled ?? true)); set('hotmail_alias_max_per_account',h.hotmail_alias_max_per_account||r.hotmail_alias_max_per_account||5); onMailProviderChange(); setChecked('env_random_enabled',boolValue(h.env_random_enabled ?? r.env_random_enabled ?? false)); set('env_proxy_pool',h.env_proxy_pool||r.env_proxy_pool||''); set('env_ua_pool',h.env_ua_pool||r.env_ua_pool||''); set('env_accept_language_pool',h.env_accept_language_pool||r.env_accept_language_pool||''); set('env_timezone_pool',h.env_timezone_pool||r.env_timezone_pool||''); set('env_viewport_pool',h.env_viewport_pool||r.env_viewport_pool||''); setSelectValue('sms_provider',provider); lastSmsProvider=provider; setSelectValue('hero_sms_country',h.hero_sms_country||r.hero_sms_country||'151'); set('hero_sms_min_price',h.hero_sms_min_price||r.hero_sms_min_price||''); set('hero_sms_max_price',h.hero_sms_max_price||r.hero_sms_max_price||''); set('hero_sms_api_key',smsKeyCache[provider]||'')}catch(e){}}
 const baseLoadDefaults=loadDefaults; loadDefaults=async function(){await baseLoadDefaults(); try{const c=await api('/api/config'); const logs=(c.config&&c.config.logs)||{}; const r=(c.config&&c.config.register)||{}; const h=(c.config&&(c.config.phone_direct||c.config.hero_phone_bind))||{}; if(currentSmsProvider()==='5sim'){smsKeyCache['5sim']=h.sms_api_key||r.sms_api_key||h.hero_sms_api_key||r.hero_sms_api_key||''; if(!val('hero_sms_api_key'))set('hero_sms_api_key',smsKeyCache['5sim'])} set('job_log_max_mb',logs.job_log_max_mb||100)}catch(e){}}
-async function loadRetryDefaults(){try{const c=await api('/api/config'); const r=(c.config&&c.config.register)||{}; const h=(c.config&&(c.config.phone_direct||c.config.hero_phone_bind))||{}; setChecked('hero_sms_auto_retry', boolValue(h.hero_sms_auto_retry ?? r.hero_sms_auto_retry ?? false)); set('hero_sms_retry_count', h.hero_sms_retry_count||r.hero_sms_retry_count||3); set('hero_sms_wait_timeout', h.hero_sms_wait_timeout||r.hero_sms_wait_timeout||60); set('hero_sms_wait_interval', h.hero_sms_wait_interval||r.hero_sms_wait_interval||5); set('hero_sms_resend_after_seconds', h.hero_sms_resend_after_seconds||r.hero_sms_resend_after_seconds||30); set('hero_sms_timeout_after_resend_seconds', h.hero_sms_timeout_after_resend_seconds||r.hero_sms_timeout_after_resend_seconds||60); set('hero_sms_release_after_seconds', h.hero_sms_release_after_seconds||r.hero_sms_release_after_seconds||120)}catch(e){}}
+async function loadRetryDefaults(){try{const c=await api('/api/config'); const r=(c.config&&c.config.register)||{}; const h=(c.config&&(c.config.phone_direct||c.config.hero_phone_bind))||{}; setChecked('sms_auto_retry', boolValue(h.sms_auto_retry ?? r.sms_auto_retry ?? h.hero_sms_auto_retry ?? r.hero_sms_auto_retry ?? false)); set('sms_retry_count', h.sms_retry_count||r.sms_retry_count||h.hero_sms_retry_count||r.hero_sms_retry_count||3); set('sms_wait_timeout', h.sms_wait_timeout||r.sms_wait_timeout||h.hero_sms_wait_timeout||r.hero_sms_wait_timeout||60); set('sms_wait_interval', h.sms_wait_interval||r.sms_wait_interval||h.hero_sms_wait_interval||r.hero_sms_wait_interval||5); set('sms_resend_after_seconds', h.sms_resend_after_seconds||r.sms_resend_after_seconds||h.hero_sms_resend_after_seconds||r.hero_sms_resend_after_seconds||30); set('sms_timeout_after_resend_seconds', h.sms_timeout_after_resend_seconds||r.sms_timeout_after_resend_seconds||h.hero_sms_timeout_after_resend_seconds||r.hero_sms_timeout_after_resend_seconds||60); set('sms_release_after_seconds', h.sms_release_after_seconds||r.sms_release_after_seconds||h.hero_sms_release_after_seconds||r.hero_sms_release_after_seconds||120)}catch(e){}}
 async function saveRuntimeConfig(){try{const values={proxy:val('proxy'),codex2api_url:val('codex2api_url'),codex2api_admin_key:val('codex2api_admin_key'),codex2api_proxy_url:val('codex2api_proxy_url')}; const out=await api('/api/config',{method:'POST',body:JSON.stringify({section:'register',values})}); $('result').textContent=JSON.stringify(out,null,2); showToast('配置已保存')}catch(e){showToast('保存失败：'+String(e.message||e),true)}}
 async function saveLogConfig(){try{const max=Number(val('job_log_max_mb')||100); const out=await api('/api/config',{method:'POST',body:JSON.stringify({section:'logs',values:{job_log_max_mb:Math.max(1,max)}})}); showToast('日志配置已保存'); return out}catch(e){showToast('日志配置保存失败：'+String(e.message||e),true); throw e}}
 function tokenStatusText(a){return (a&&a.token_status_label)||'无'}
@@ -755,7 +767,7 @@ function toggleAll(checked){document.querySelectorAll('.account-check').forEach(
 function selected(){const ids=checkedIds(); return accounts.find(a=>a.id===ids[0])}
 function fillSelected(){const a=selected(); if(!a)return; set('account_id',a.id); set('reauth_id',a.id); set('email',a.email); set('password',''); set('provider',(a.mailbox&&a.mailbox.provider)||'cloudflare-temp-email')}
 async function saveAccount(){const btn=document.activeElement; try{if(btn&&btn.tagName==='BUTTON')btn.disabled=true; const email=val('email'), password=val('password'), id=val('account_id'); if(!email){showToast('请填写邮箱',true); return} const cfg=await api('/api/config').catch(()=>({config:{}})); const r=(cfg.config&&cfg.config.register)||{}; const provider=val('provider'); const mailbox={provider,email,bind_email:email}; if(provider==='cloudflare-temp-email'){mailbox.base_url=r.cf_temp_base_url||''; mailbox.admin_auth=r.cf_temp_admin_auth||''; mailbox.custom_auth=r.cf_temp_custom_auth||''; mailbox.domain=r.cf_temp_domain||''} if(provider==='icloud'){mailbox.host=r.icloud_host||'icloud.com'; mailbox.imap_user=r.icloud_imap_user||''; mailbox.imap_password=r.icloud_imap_password||''; mailbox.cookies_json=r.icloud_cookies_json||''; mailbox.cookies_path=r.icloud_cookies_path||''} if(provider==='hotmail-api'){mailbox.base_url=r.hotmail_api_base_url||''; mailbox.mailboxes=r.hotmail_mailboxes||'INBOX,Junk'; mailbox.sender_filters=r.hotmail_sender_filters||'openai,noreply,no-reply'; mailbox.subject_filters=r.hotmail_subject_filters||'code,verification,验证码'; mailbox.required_keywords=r.hotmail_required_keywords||''} const payload={id,email,source:'manual',mailbox}; if(password&&password!=='***')payload.password=password; const item=await api('/api/accounts',{method:'POST',body:JSON.stringify(payload)}); $('result').textContent=JSON.stringify(item,null,2); showToast('账号已保存'); await loadAccounts()}catch(e){$('result').textContent='保存账号失败：'+String(e.message||e); showToast('保存账号失败：'+String(e.message||e),true)}finally{if(btn&&btn.tagName==='BUTTON')btn.disabled=false}}
-function importPayload(){const sms=taskValues(); return {account_id:val('reauth_id'), proxy:val('proxy'), codex2api_url:val('codex2api_url'), codex2api_admin_key:val('codex2api_admin_key'), codex2api_proxy_url:val('codex2api_proxy_url'), sms_provider:sms.sms_provider, sms_api_key:sms.sms_api_key, hero_sms_api_key:sms.hero_sms_api_key||'', smsbower_api_key:sms.smsbower_api_key||'', hero_sms_base_url:sms.hero_sms_base_url||'', smsbower_base_url:sms.smsbower_base_url||'', hero_sms_country:sms.hero_sms_country, hero_sms_service:sms.hero_sms_service||'dr', hero_sms_min_price:sms.hero_sms_min_price, hero_sms_max_price:sms.hero_sms_max_price, hero_sms_wait_timeout:sms.hero_sms_wait_timeout||60, hero_sms_wait_interval:sms.hero_sms_wait_interval||5, hero_sms_resend_after_seconds:sms.hero_sms_resend_after_seconds||30, hero_sms_timeout_after_resend_seconds:sms.hero_sms_timeout_after_resend_seconds||60, hero_sms_release_after_seconds:sms.hero_sms_release_after_seconds||120, hero_sms_auto_retry:sms.hero_sms_auto_retry, hero_sms_retry_count:sms.hero_sms_retry_count||3}}
+function importPayload(){const sms=taskValues(); return {account_id:val('reauth_id'), proxy:val('proxy'), codex2api_url:val('codex2api_url'), codex2api_admin_key:val('codex2api_admin_key'), codex2api_proxy_url:val('codex2api_proxy_url'), sms_provider:sms.sms_provider, sms_api_key:sms.sms_api_key, hero_sms_api_key:sms.hero_sms_api_key||'', smsbower_api_key:sms.smsbower_api_key||'', hero_sms_base_url:sms.hero_sms_base_url||'', smsbower_base_url:sms.smsbower_base_url||'', hero_sms_country:sms.hero_sms_country, hero_sms_service:sms.hero_sms_service||'dr', hero_sms_min_price:sms.hero_sms_min_price, hero_sms_max_price:sms.hero_sms_max_price, sms_wait_timeout:sms.sms_wait_timeout||60, sms_wait_interval:sms.sms_wait_interval||5, sms_resend_after_seconds:sms.sms_resend_after_seconds||30, sms_timeout_after_resend_seconds:sms.sms_timeout_after_resend_seconds||60, sms_release_after_seconds:sms.sms_release_after_seconds||120, sms_auto_retry:sms.sms_auto_retry, sms_retry_count:sms.sms_retry_count||3}}
 async function startManualReauth(){try{const out=await api('/api/accounts/reauthorize',{method:'POST',body:JSON.stringify({account_id:val('reauth_id'),proxy:val('proxy')})}); $('result').textContent=JSON.stringify(out,null,2); if(out.authorize_url) window.open(out.authorize_url,'_blank')}catch(e){$('result').textContent='手动授权失败：'+String(e.message||e); showToast('手动授权失败：'+String(e.message||e),true)}}
 async function autoReauth(){const btn=document.activeElement; try{if(btn&&btn.tagName==='BUTTON')btn.disabled=true; const out=await api('/api/accounts/reauthorize/auto/job',{method:'POST',body:JSON.stringify({...importPayload(),wait_timeout:60,wait_interval:2,request_timeout:30})}); $('result').textContent='任务已启动：'+out.job_id+'\n下面任务区会实时刷新阶段和日志'; showToast('重新授权任务已提交'); await loadAccounts(); await loadJobs(); setTimeout(loadJobs,500)}catch(e){$('result').textContent='重新授权启动失败：'+String(e.message||e); showToast('重新授权启动失败：'+String(e.message||e),true)}finally{if(btn&&btn.tagName==='BUTTON')btn.disabled=false}}
 async function autoReauthAccount(id){set('reauth_id',id); await autoReauth()}
@@ -767,8 +779,8 @@ function accountResult(){return $('account_result')||$('result')}
 async function showAccount(id){try{const out=await api(`/api/accounts/${encodeURIComponent(id)}`); const result=accountResult(); if(result){result.classList.remove('hidden'); result.textContent=JSON.stringify(out.item||out,null,2); result.scrollIntoView({block:'nearest',behavior:'smooth'})} showToast('详情已显示')}catch(e){const result=accountResult(); if(result){result.classList.remove('hidden'); result.textContent=String(e.message||e)} showToast('详情加载失败',true)}}
 async function exportAccountJson(id){try{const out=await api(`/api/accounts/${encodeURIComponent(id)}/export-json`); const text=JSON.stringify(out.payload,null,2); const result=accountResult(); if(result){result.classList.remove('hidden'); result.textContent=text; result.scrollIntoView({block:'nearest',behavior:'smooth'})} const blob=new Blob([text+'\n'],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=out.filename||'cpa-account.json'; document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(a.href); a.remove()},0); await loadAccounts()}catch(e){const result=accountResult(); if(result){result.classList.remove('hidden'); result.textContent=String(e.message||e); result.scrollIntoView({block:'nearest',behavior:'smooth'})} showToast('导出失败，查看账号结果区',true); await loadAccounts()}}
 async function batchDeleteSelected(){const btn=document.activeElement; const ids=checkedIds(); if(!ids.length){alert('先勾选账号');return} if(!confirm(`确认删除勾选的 ${ids.length} 个账号？`))return; try{if(btn&&btn.tagName==='BUTTON')btn.disabled=true; const out=await api('/api/accounts/delete',{method:'POST',body:JSON.stringify({ids})}); $('result').textContent=JSON.stringify(out,null,2); showToast('批量删除完成'); await loadAccounts()}catch(e){$('result').textContent='批量删除失败：'+String(e.message||e); showToast('批量删除失败：'+String(e.message||e),true)}finally{if(btn&&btn.tagName==='BUTTON')btn.disabled=false}}
-function taskValues(){const provider=val('sms_provider')||'hero_sms'; const apiKey=val('hero_sms_api_key'); smsKeyCache[provider]=apiKey; const values={proxy:val('proxy'),codex2api_url:val('codex2api_url'),codex2api_admin_key:val('codex2api_admin_key'),codex2api_proxy_url:val('codex2api_proxy_url'),codex2api_auto_import:!!val('codex2api_url')&&!!val('codex2api_admin_key'),total:Number(val('task_total')||1),threads:Number(val('task_threads')||1),default_password:val('default_password'),mail_type:val('task_mail_type')||'cloudflare-temp-email',icloud_email:val('icloud_email'),icloud_imap_user:val('icloud_imap_user'),icloud_imap_password:val('icloud_imap_password'),icloud_cookies_json:val('icloud_cookies_json'),icloud_cookies_path:val('icloud_cookies_path'),icloud_host:val('icloud_host')||'icloud.com',icloud_hme_label:val('icloud_hme_label')||'RegPilot',cf_temp_domain:val('cf_temp_domain'),cf_temp_base_url:val('cf_temp_base_url'),cf_temp_admin_auth:val('cf_temp_admin_auth'),hotmail_api_base_url:val('hotmail_api_base_url'),hotmail_alias_enabled:checked('hotmail_alias_enabled'),hotmail_alias_max_per_account:Number(val('hotmail_alias_max_per_account')||5),hotmail_mailboxes:val('hotmail_mailboxes')||'INBOX,Junk',hotmail_sender_filters:val('hotmail_sender_filters')||'openai,noreply,no-reply',hotmail_subject_filters:val('hotmail_subject_filters')||'code,verification,验证码',hotmail_required_keywords:val('hotmail_required_keywords'),sms_provider:provider,sms_api_key:apiKey,hero_sms_country:val('hero_sms_country'),hero_sms_min_price:val('hero_sms_min_price'),hero_sms_max_price:val('hero_sms_max_price'),hero_sms_service:'dr',hero_sms_wait_timeout:60,hero_sms_wait_interval:5,hero_sms_resend_after_seconds:30,hero_sms_timeout_after_resend_seconds:60,hero_sms_release_after_seconds:120,hero_sms_auto_retry:false,hero_sms_retry_count:3}; if($('env_random_enabled'))values.env_random_enabled=checked('env_random_enabled'); if($('env_proxy_pool'))values.env_proxy_pool=val('env_proxy_pool'); if($('env_ua_pool'))values.env_ua_pool=val('env_ua_pool'); if($('env_accept_language_pool'))values.env_accept_language_pool=val('env_accept_language_pool'); if($('env_timezone_pool'))values.env_timezone_pool=val('env_timezone_pool'); if($('env_viewport_pool'))values.env_viewport_pool=val('env_viewport_pool'); if(provider==='smsbower'){values.smsbower_api_key=apiKey}else{values.hero_sms_api_key=apiKey} return values}
-const baseTaskValues=taskValues; taskValues=function(){const values=baseTaskValues(); values.hero_sms_auto_retry=checked('hero_sms_auto_retry'); values.hero_sms_retry_count=Number(val('hero_sms_retry_count')||3); values.hero_sms_wait_timeout=Math.max(15,Number(val('hero_sms_wait_timeout')||60)); values.hero_sms_wait_interval=Math.max(1,Number(val('hero_sms_wait_interval')||5)); values.hero_sms_resend_after_seconds=Math.max(1,Number(val('hero_sms_resend_after_seconds')||30)); values.hero_sms_timeout_after_resend_seconds=Math.max(1,Number(val('hero_sms_timeout_after_resend_seconds')||60)); values.hero_sms_release_after_seconds=Math.max(15,Number(val('hero_sms_release_after_seconds')||120)); return values}
+function taskValues(){const provider=val('sms_provider')||'hero_sms'; const apiKey=val('hero_sms_api_key'); smsKeyCache[provider]=apiKey; const values={proxy:val('proxy'),codex2api_url:val('codex2api_url'),codex2api_admin_key:val('codex2api_admin_key'),codex2api_proxy_url:val('codex2api_proxy_url'),codex2api_auto_import:!!val('codex2api_url')&&!!val('codex2api_admin_key'),total:Number(val('task_total')||1),threads:Number(val('task_threads')||1),default_password:val('default_password'),mail_type:val('task_mail_type')||'cloudflare-temp-email',icloud_email:val('icloud_email'),icloud_imap_user:val('icloud_imap_user'),icloud_imap_password:val('icloud_imap_password'),icloud_cookies_json:val('icloud_cookies_json'),icloud_cookies_path:val('icloud_cookies_path'),icloud_host:val('icloud_host')||'icloud.com',icloud_hme_label:val('icloud_hme_label')||'RegPilot',cf_temp_domain:val('cf_temp_domain'),cf_temp_base_url:val('cf_temp_base_url'),cf_temp_admin_auth:val('cf_temp_admin_auth'),hotmail_api_base_url:val('hotmail_api_base_url'),hotmail_alias_enabled:checked('hotmail_alias_enabled'),hotmail_alias_max_per_account:Number(val('hotmail_alias_max_per_account')||5),hotmail_mailboxes:val('hotmail_mailboxes')||'INBOX,Junk',hotmail_sender_filters:val('hotmail_sender_filters')||'openai,noreply,no-reply',hotmail_subject_filters:val('hotmail_subject_filters')||'code,verification,验证码',hotmail_required_keywords:val('hotmail_required_keywords'),sms_provider:provider,sms_api_key:apiKey,hero_sms_country:val('hero_sms_country'),hero_sms_min_price:val('hero_sms_min_price'),hero_sms_max_price:val('hero_sms_max_price'),hero_sms_service:'dr',sms_wait_timeout:60,sms_wait_interval:5,sms_resend_after_seconds:30,sms_timeout_after_resend_seconds:60,sms_release_after_seconds:120,sms_auto_retry:false,sms_retry_count:3}; if($('env_random_enabled'))values.env_random_enabled=checked('env_random_enabled'); if($('env_proxy_pool'))values.env_proxy_pool=val('env_proxy_pool'); if($('env_ua_pool'))values.env_ua_pool=val('env_ua_pool'); if($('env_accept_language_pool'))values.env_accept_language_pool=val('env_accept_language_pool'); if($('env_timezone_pool'))values.env_timezone_pool=val('env_timezone_pool'); if($('env_viewport_pool'))values.env_viewport_pool=val('env_viewport_pool'); if(provider==='smsbower'){values.smsbower_api_key=apiKey}else{values.hero_sms_api_key=apiKey} return values}
+const baseTaskValues=taskValues; taskValues=function(){const values=baseTaskValues(); values.sms_auto_retry=checked('sms_auto_retry'); values.sms_retry_count=Number(val('sms_retry_count')||3); values.sms_wait_timeout=Math.max(15,Number(val('sms_wait_timeout')||60)); values.sms_wait_interval=Math.max(1,Number(val('sms_wait_interval')||5)); values.sms_resend_after_seconds=Math.max(1,Number(val('sms_resend_after_seconds')||30)); values.sms_timeout_after_resend_seconds=Math.max(1,Number(val('sms_timeout_after_resend_seconds')||60)); values.sms_release_after_seconds=Math.max(15,Number(val('sms_release_after_seconds')||120)); return values}
 async function saveTaskConfig(){try{const values=taskValues(); const a=await api('/api/config',{method:'POST',body:JSON.stringify({section:'register',values})}); const b=await api('/api/config',{method:'POST',body:JSON.stringify({section:'phone_direct',values})}); $('result').textContent=JSON.stringify({register:a.ok,phone_direct:b.ok},null,2); showToast('任务配置已保存'); await loadJobs()}catch(e){$('result').textContent='任务配置保存失败：'+String(e.message||e); showToast('任务配置保存失败：'+String(e.message||e),true)}}
 function renderMicrosoftMailAccounts(items){const body=$('ms_mail_accounts'); if(!body)return; if(!items||!items.length){body.innerHTML='<tr><td colspan="6" class="muted">暂无微软邮箱账号</td></tr>'; return} body.innerHTML=items.map(a=>`<tr><td>${esc(a.email||'')}</td><td>${esc(a.status||'-')}</td><td>${a.used?'是':'否'}</td><td>${esc(String(a.alias_index||0))}/${esc(String(a.alias_max||5))}</td><td>${esc(a.updated_at||'')}</td><td><button onclick="deleteMicrosoftMailAccount('${esc(a.id||'')}')">删除</button></td></tr>`).join('')}
 async function loadMicrosoftMailAccounts(){try{const out=await api('/api/microsoft-mail/accounts'); renderMicrosoftMailAccounts(out.items||[])}catch(e){showToast('微软邮箱账户池加载失败：'+String(e.message||e),true)}}
@@ -801,7 +813,7 @@ function accountEmailById(id){const key=String(id||'').trim(); const item=(accou
 function jobAccountEmail(job,accountId=''){return String((job&&job.result&&job.result.item&&job.result.item.email)||accountEmailById(accountId)||'').trim()}
 function translateLogLine(line,job=null){let raw=String(line||'').trim(); if(!raw)return ''; if(raw.startsWith('Flow debug summary:')||raw.startsWith('Flow debug encode failed:'))return ''; if(raw.includes(' summary {')||raw.includes(' summary {\''))return ''; if(raw.startsWith('{')||raw.startsWith("{'"))return ''; if(raw.startsWith('Flow stage: account ')){const accountId=raw.slice('Flow stage: account '.length).trim(); const email=jobAccountEmail(job,accountId); if(email)raw='Flow stage: account '+email} if(raw.startsWith('Flow stage:')){const value=raw.slice('Flow stage:'.length).trim(); if(value==='job queued')return '阶段：任务已排队，等待前一个任务完成'; if(value==='job started')return '阶段：任务开始执行'; if(value.startsWith('job failed '))return '阶段：任务失败：'+translateDetails(value.slice('job failed '.length)); const stage=translateStage(value); return stage?'阶段：'+stage:''} return translateDetails(raw)}
 function translateLogOutput(output,job=null){const seen=new Set(); const out=[]; for(const line of String(output||'').split('\n')){const text=translateLogLine(line,job); if(!text)continue; const compact=text.replace(/\s+/g,' ').trim(); if(seen.has(compact))continue; seen.add(compact); out.push(text)} return out.join('\n')}
-const baseTranslateDetailsForConfig=translateDetails; translateDetails=function(text){return baseTranslateDetailsForConfig(text).replace(/invalid_mail_type/g,'邮箱服务类型无效').replace(/invalid_sms_provider/g,'接码服务类型无效').replace(/invalid_total/g,'注册数量必须是大于 0 的整数').replace(/invalid_threads/g,'线程数必须是大于 0 的整数').replace(/invalid_request_timeout/g,'请求超时时间必须是大于 0 的整数').replace(/invalid_wait_timeout/g,'验证码等待时间必须是大于 0 的整数').replace(/invalid_wait_interval/g,'验证码轮询间隔必须是大于 0 的整数').replace(/invalid_job_log_max_mb/g,'日志上限必须是大于 0 的整数').replace(/invalid_env_random_enabled/g,'随机环境开关值无效').replace(/invalid_codex2api_auto_import/g,'CPA 自动导入开关值无效').replace(/invalid_cf_temp_use_random_subdomain/g,'Cloudflare 随机子域名开关值无效').replace(/invalid_hero_sms_wait_timeout/g,'短信等待时间必须是大于 0 的整数').replace(/invalid_hero_sms_wait_interval/g,'短信轮询间隔必须是大于 0 的整数').replace(/invalid_hero_sms_retry_count/g,'短信重试次数必须是大于 0 的整数').replace(/invalid_hero_sms_auto_retry/g,'短信自动重试开关值无效').replace(/invalid_hero_sms_min_price/g,'最低价必须是数字').replace(/invalid_hero_sms_max_price/g,'最高价必须是数字').replace(/invalid_hero_sms_price_range/g,'最低价不能高于最高价').replace(/cf_temp_base_url_required/g,'Cloudflare 邮箱 API 地址必填').replace(/cf_temp_admin_auth_required/g,'Cloudflare Admin Auth 必填').replace(/cf_temp_domain_required/g,'Cloudflare 邮箱域名必填').replace(/icloud_email_or_cookies_required/g,'iCloud 需填写 HME 邮箱或 Cookies').replace(/icloud_imap_or_cookies_required/g,'iCloud 需填写 IMAP 账号密码或 Cookies').replace(/hotmail_api_base_url_required/g,'Hotmail API 地址必填').replace(/microsoft_mail_pool_empty/g,'微软邮箱账户池没有可用账号')}
+const baseTranslateDetailsForConfig=translateDetails; translateDetails=function(text){return baseTranslateDetailsForConfig(text).replace(/invalid_mail_type/g,'邮箱服务类型无效').replace(/invalid_sms_provider/g,'接码服务类型无效').replace(/invalid_total/g,'注册数量必须是大于 0 的整数').replace(/invalid_threads/g,'线程数必须是大于 0 的整数').replace(/invalid_request_timeout/g,'请求超时时间必须是大于 0 的整数').replace(/invalid_wait_timeout/g,'验证码等待时间必须是大于 0 的整数').replace(/invalid_wait_interval/g,'验证码轮询间隔必须是大于 0 的整数').replace(/invalid_job_log_max_mb/g,'日志上限必须是大于 0 的整数').replace(/invalid_env_random_enabled/g,'随机环境开关值无效').replace(/invalid_codex2api_auto_import/g,'CPA 自动导入开关值无效').replace(/invalid_cf_temp_use_random_subdomain/g,'Cloudflare 随机子域名开关值无效').replace(/invalid_hero_sms_wait_timeout|invalid_sms_wait_timeout/g,'短信等待时间必须是大于 0 的整数').replace(/invalid_hero_sms_wait_interval|invalid_sms_wait_interval/g,'短信轮询间隔必须是大于 0 的整数').replace(/invalid_hero_sms_retry_count|invalid_sms_retry_count/g,'短信重试次数必须是大于 0 的整数').replace(/invalid_hero_sms_auto_retry|invalid_sms_auto_retry/g,'短信自动重试开关值无效').replace(/invalid_sms_min_price|invalid_hero_sms_min_price/g,'最低价必须是数字').replace(/invalid_sms_max_price|invalid_hero_sms_max_price/g,'最高价必须是数字').replace(/invalid_sms_price_range|invalid_hero_sms_price_range/g,'最低价不能高于最高价').replace(/cf_temp_base_url_required/g,'Cloudflare 邮箱 API 地址必填').replace(/cf_temp_admin_auth_required/g,'Cloudflare Admin Auth 必填').replace(/cf_temp_domain_required/g,'Cloudflare 邮箱域名必填').replace(/icloud_email_or_cookies_required/g,'iCloud 需填写 HME 邮箱或 Cookies').replace(/icloud_imap_or_cookies_required/g,'iCloud 需填写 IMAP 账号密码或 Cookies').replace(/hotmail_api_base_url_required/g,'Hotmail API 地址必填').replace(/microsoft_mail_pool_empty/g,'微软邮箱账户池没有可用账号')}
 const baseTranslateDetailsForTaskErrors=translateDetails; translateDetails=function(text){return baseTranslateDetailsForTaskErrors(text).replace(/manual_phone_verification_required/g,'无法自动授权：需要人工完成手机二次验证').replace(/(?:hero_sms|smsbower|5sim)_retry_exhausted_after_(\d+)_attempts/g,'接码自动重试已用完（$1 次）').replace(/action=replace_phone_or_environment/g,'建议=换号或更换代理环境').replace(/code=授权步骤无效/g,'错误码=授权步骤无效').replace(/message=授权步骤无效/g,'原因=授权步骤无效')}
 function jobStartMs(j){const t=Date.parse(String(j.started_at||'').replace(' ','T')); return isNaN(t)?0:t}
 function chronologicalJobs(items){return [...(items||[])].sort((a,b)=>jobStartMs(a)-jobStartMs(b)||String(a.id||'').localeCompare(String(b.id||'')))}

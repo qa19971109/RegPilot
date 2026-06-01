@@ -1452,7 +1452,7 @@ def poll_hero_sms_code(
             return code
         text = _hero_sms_text(payload)
         if re.search(r"STATUS_CANCEL|STATUS_BANNED|NO_ACTIVATION|BAD_STATUS|ERROR|CANCELED|CANCELLED|BANNED|TIMEOUT", text, re.I):
-            raise RuntimeError(f"hero_sms_terminal_status: {text[:300]}")
+            raise RuntimeError(f"sms_terminal_status: {text[:300]}")
         elapsed = max(0, int(datetime.now(timezone.utc).timestamp() - start_ts))
         if (not resent) and elapsed >= resend_after:
             if callable(on_resend):
@@ -1477,7 +1477,7 @@ def poll_hero_sms_code(
             )
             next_progress_ts = now_ts + heartbeat_interval
         time.sleep(interval)
-    raise RuntimeError("hero_sms_code_timeout")
+    raise RuntimeError("sms_code_timeout")
 
 
 def set_hero_sms_status(config: HeroSMSConfig, activation_id: str, status: int) -> None:
@@ -2465,7 +2465,7 @@ def _classify_phone_flow_error(raw_error: str) -> PhoneFlowFailure:
         return PhoneFlowFailure(code="unknown", message="", retryable=False, recovery_action="stop")
     if "whatsapp_channel_detected" in lowered:
         return PhoneFlowFailure(code="unexpected_delivery_channel", message=message, retryable=True, recovery_action="replace_phone")
-    if "hero_sms_code_timeout" in lowered or "phone_otp_timeout" in lowered:
+    if "sms_code_timeout" in lowered or "hero_sms_code_timeout" in lowered or "phone_otp_timeout" in lowered:
         return PhoneFlowFailure(code="sms_timeout", message=message, retryable=True, recovery_action="resend_or_replace_phone")
     if lowered.startswith("validate_phone_signup_otp_") or "phone_otp_validate_failed" in lowered:
         return PhoneFlowFailure(code="sms_rejected", message=message, retryable=True, recovery_action="replace_phone")

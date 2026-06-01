@@ -115,13 +115,13 @@ WEBUI_CONFIG_DEFAULTS: dict[str, dict[str, Any]] = {
         "hero_sms_service": "dr",
         "hero_sms_min_price": "",
         "hero_sms_max_price": "0.023",
-        "hero_sms_wait_timeout": 60,
-        "hero_sms_wait_interval": 5,
-        "hero_sms_resend_after_seconds": 30,
-        "hero_sms_timeout_after_resend_seconds": 60,
-        "hero_sms_release_after_seconds": 120,
-        "hero_sms_auto_retry": False,
-        "hero_sms_retry_count": 3,
+        "sms_wait_timeout": 60,
+        "sms_wait_interval": 5,
+        "sms_resend_after_seconds": 30,
+        "sms_timeout_after_resend_seconds": 60,
+        "sms_release_after_seconds": 120,
+        "sms_auto_retry": False,
+        "sms_retry_count": 3,
     },
     "hero_phone_bind": {
         "proxy": "",
@@ -146,13 +146,13 @@ WEBUI_CONFIG_DEFAULTS: dict[str, dict[str, Any]] = {
         "hero_sms_service": "dr",
         "hero_sms_min_price": "",
         "hero_sms_max_price": "0.023",
-        "hero_sms_wait_timeout": 60,
-        "hero_sms_wait_interval": 5,
-        "hero_sms_resend_after_seconds": 30,
-        "hero_sms_timeout_after_resend_seconds": 60,
-        "hero_sms_release_after_seconds": 120,
-        "hero_sms_auto_retry": False,
-        "hero_sms_retry_count": 3,
+        "sms_wait_timeout": 60,
+        "sms_wait_interval": 5,
+        "sms_resend_after_seconds": 30,
+        "sms_timeout_after_resend_seconds": 60,
+        "sms_release_after_seconds": 120,
+        "sms_auto_retry": False,
+        "sms_retry_count": 3,
         "mail_type": "cloudflare-temp-email",
         "icloud_email": "",
         "icloud_imap_user": "",
@@ -497,10 +497,34 @@ def _clone_webui_config_defaults() -> dict[str, dict[str, Any]]:
     return json.loads(json.dumps(WEBUI_CONFIG_DEFAULTS))
 
 
+_WEBUI_LEGACY_KEY_MIGRATIONS: tuple[tuple[str, str], ...] = (
+    ("hero_sms_wait_timeout", "sms_wait_timeout"),
+    ("hero_sms_wait_interval", "sms_wait_interval"),
+    ("hero_sms_resend_after_seconds", "sms_resend_after_seconds"),
+    ("hero_sms_timeout_after_resend_seconds", "sms_timeout_after_resend_seconds"),
+    ("hero_sms_release_after_seconds", "sms_release_after_seconds"),
+    ("hero_sms_auto_retry", "sms_auto_retry"),
+    ("hero_sms_retry_count", "sms_retry_count"),
+)
+
+
+def _migrate_legacy_webui_config(config: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(config, dict):
+        return config
+    for section in config.values():
+        if not isinstance(section, dict):
+            continue
+        for old_key, new_key in _WEBUI_LEGACY_KEY_MIGRATIONS:
+            if old_key in section and new_key not in section:
+                section[new_key] = section[old_key]
+    return config
+
+
 def _merge_webui_config(raw: Any) -> dict[str, dict[str, Any]]:
     merged = _clone_webui_config_defaults()
     if not isinstance(raw, dict):
         return merged
+    raw = _migrate_legacy_webui_config(raw)
     for section, defaults in merged.items():
         candidate = raw.get(section)
         if not isinstance(candidate, dict):
@@ -603,6 +627,7 @@ _WEBUI_BOOL_KEYS = {
     "cf_temp_use_random_subdomain",
     "hotmail_alias_enabled",
     "codex2api_auto_import",
+    "sms_auto_retry",
     "hero_sms_auto_retry",
     "auto_pause_on_expired",
 }
@@ -613,12 +638,12 @@ _WEBUI_POSITIVE_INT_KEYS = {
     "request_timeout",
     "wait_timeout",
     "wait_interval",
-    "hero_sms_wait_timeout",
-    "hero_sms_wait_interval",
-    "hero_sms_resend_after_seconds",
-    "hero_sms_timeout_after_resend_seconds",
-    "hero_sms_release_after_seconds",
-    "hero_sms_retry_count",
+    "sms_wait_timeout",
+    "sms_wait_interval",
+    "sms_resend_after_seconds",
+    "sms_timeout_after_resend_seconds",
+    "sms_release_after_seconds",
+    "sms_retry_count",
     "concurrency",
     "priority",
     "rate_multiplier",
@@ -1184,13 +1209,13 @@ def _sms_config_from_payload(payload: dict[str, Any]) -> HeroSMSConfig:
         service=service,
         min_price=float(payload.get("hero_sms_min_price") or 0),
         max_price=float(payload.get("hero_sms_max_price") or 0),
-        wait_timeout=max(15, int(payload.get("hero_sms_wait_timeout") or 60)),
-        wait_interval=max(1, int(payload.get("hero_sms_wait_interval") or 5)),
-        auto_retry=_bool_from_payload(payload, "hero_sms_auto_retry"),
-        resend_after_seconds=max(1, int(payload.get("hero_sms_resend_after_seconds") or 30)),
-        timeout_after_resend_seconds=max(1, int(payload.get("hero_sms_timeout_after_resend_seconds") or 60)),
-        release_after_seconds=max(15, int(payload.get("hero_sms_release_after_seconds") or 120)),
-        max_retry_count=max(1, int(payload.get("hero_sms_retry_count") or 3)),
+        wait_timeout=max(15, int(payload.get("sms_wait_timeout") or payload.get("hero_sms_wait_timeout") or 60)),
+        wait_interval=max(1, int(payload.get("sms_wait_interval") or payload.get("hero_sms_wait_interval") or 5)),
+        auto_retry=_bool_from_payload(payload, "sms_auto_retry") or _bool_from_payload(payload, "hero_sms_auto_retry"),
+        resend_after_seconds=max(1, int(payload.get("sms_resend_after_seconds") or payload.get("hero_sms_resend_after_seconds") or 30)),
+        timeout_after_resend_seconds=max(1, int(payload.get("sms_timeout_after_resend_seconds") or payload.get("hero_sms_timeout_after_resend_seconds") or 60)),
+        release_after_seconds=max(15, int(payload.get("sms_release_after_seconds") or payload.get("hero_sms_release_after_seconds") or 120)),
+        max_retry_count=max(1, int(payload.get("sms_retry_count") or payload.get("hero_sms_retry_count") or 3)),
     )
 
 

@@ -1334,13 +1334,13 @@ def _build_reauthorize_sms_config(
     hero_sms_service: str = "",
     hero_sms_min_price: float | str = 0.0,
     hero_sms_max_price: float | str = 0.0,
-    hero_sms_wait_timeout: int = 60,
-    hero_sms_wait_interval: int = 5,
-    hero_sms_resend_after_seconds: int = 30,
-    hero_sms_timeout_after_resend_seconds: int = 60,
-    hero_sms_release_after_seconds: int = 120,
-    hero_sms_retry_count: int = 3,
-    hero_sms_auto_retry: bool = False,
+    sms_wait_timeout: int = 60,
+    sms_wait_interval: int = 5,
+    sms_resend_after_seconds: int = 30,
+    sms_timeout_after_resend_seconds: int = 60,
+    sms_release_after_seconds: int = 120,
+    sms_retry_count: int = 3,
+    sms_auto_retry: bool = False,
 ) -> HeroSMSConfig:
     provider = _normalize_sms_provider(sms_provider or "hero_sms")
     key = str(sms_api_key or "").strip()
@@ -1385,13 +1385,13 @@ def _build_reauthorize_sms_config(
         service=service,
         min_price=min_price,
         max_price=max_price,
-        wait_timeout=max(15, int(hero_sms_wait_timeout or 60)),
-        wait_interval=max(1, int(hero_sms_wait_interval or 5)),
-        resend_after_seconds=max(1, int(hero_sms_resend_after_seconds or 30)),
-        timeout_after_resend_seconds=max(1, int(hero_sms_timeout_after_resend_seconds or 60)),
-        release_after_seconds=max(15, int(hero_sms_release_after_seconds or 120)),
-        max_retry_count=max(1, int(hero_sms_retry_count or 3)),
-        auto_retry=bool(hero_sms_auto_retry),
+        wait_timeout=max(15, int(sms_wait_timeout or 60)),
+        wait_interval=max(1, int(sms_wait_interval or 5)),
+        resend_after_seconds=max(1, int(sms_resend_after_seconds or 30)),
+        timeout_after_resend_seconds=max(1, int(sms_timeout_after_resend_seconds or 60)),
+        release_after_seconds=max(15, int(sms_release_after_seconds or 120)),
+        max_retry_count=max(1, int(sms_retry_count or 3)),
+        auto_retry=bool(sms_auto_retry),
     )
 
 
@@ -2454,9 +2454,9 @@ def auto_reauthorize_account_with_email_otp(
         hero_sms_service=hero_sms_service,
         hero_sms_min_price=hero_sms_min_price,
         hero_sms_max_price=hero_sms_max_price,
-        hero_sms_wait_timeout=hero_sms_wait_timeout,
-        hero_sms_wait_interval=hero_sms_wait_interval,
-        hero_sms_auto_retry=hero_sms_auto_retry,
+        sms_wait_timeout=hero_sms_wait_timeout,
+        sms_wait_interval=hero_sms_wait_interval,
+        sms_auto_retry=hero_sms_auto_retry,
     )
     sms_retry_count = max(1, int(hero_sms_retry_count or 1)) if sms_config.auto_retry else 1
     _log_stage(f"OpenAI 代理：{_proxy_text(registrar_proxy)}")

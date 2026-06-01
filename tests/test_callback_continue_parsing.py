@@ -1752,37 +1752,37 @@ class PhoneFlowRuntimeTests(unittest.TestCase):
 
     def test_fastapi_phone_bind_defaults_to_single_attempt_when_ui_does_not_send_toggle(self):
         saved = {
-            "register": {"hero_sms_wait_timeout": 180, "hero_sms_wait_interval": 5},
-            "hero_phone_bind": {"hero_sms_auto_retry": False, "hero_sms_country": "151"},
+            "register": {"sms_wait_timeout": 180, "sms_wait_interval": 5},
+            "hero_phone_bind": {"sms_auto_retry": False, "hero_sms_country": "151"},
         }
 
         with patch("regpilot.api._load_webui_config", return_value=saved):
             merged = fastapi_api._merge_task_values("hero_phone_bind", {"hero_sms_api_key": "k"})
 
-        self.assertIs(merged["hero_sms_auto_retry"], False)
+        self.assertIs(merged["sms_auto_retry"], False)
         self.assertEqual(merged["hero_sms_country"], "151")
-        self.assertEqual(merged["hero_sms_wait_timeout"], 180)
-        self.assertEqual(merged["hero_sms_retry_count"], 3)
+        self.assertEqual(merged["sms_wait_timeout"], 180)
+        self.assertEqual(merged["sms_retry_count"], 3)
 
     def test_fastapi_phone_bind_respects_explicit_auto_retry_false(self):
-        saved = {"hero_phone_bind": {"hero_sms_auto_retry": True}}
+        saved = {"hero_phone_bind": {"sms_auto_retry": True}}
 
         with patch("regpilot.api._load_webui_config", return_value=saved):
-            merged = fastapi_api._merge_task_values("hero_phone_bind", {"hero_sms_auto_retry": False})
+            merged = fastapi_api._merge_task_values("hero_phone_bind", {"sms_auto_retry": False})
 
-        self.assertIs(merged["hero_sms_auto_retry"], False)
+        self.assertIs(merged["sms_auto_retry"], False)
 
     def test_fastapi_phone_bind_respects_explicit_retry_count(self):
-        saved = {"hero_phone_bind": {"hero_sms_auto_retry": False, "hero_sms_retry_count": 3}}
+        saved = {"hero_phone_bind": {"sms_auto_retry": False, "sms_retry_count": 3}}
 
         with patch("regpilot.api._load_webui_config", return_value=saved):
             merged = fastapi_api._merge_task_values(
                 "hero_phone_bind",
-                {"hero_sms_auto_retry": True, "hero_sms_retry_count": 5},
+                {"sms_auto_retry": True, "sms_retry_count": 5},
             )
 
-        self.assertIs(merged["hero_sms_auto_retry"], True)
-        self.assertEqual(merged["hero_sms_retry_count"], 5)
+        self.assertIs(merged["sms_auto_retry"], True)
+        self.assertEqual(merged["sms_retry_count"], 5)
 
     def test_phone_direct_batch_uses_total_and_thread_count(self):
         active = 0
@@ -1835,8 +1835,8 @@ class PhoneFlowRuntimeTests(unittest.TestCase):
                     "total": 2,
                     "threads": 1,
                     "env_random_enabled": True,
-                    "hero_sms_auto_retry": True,
-                    "hero_sms_retry_count": 2,
+                    "sms_auto_retry": True,
+                    "sms_retry_count": 2,
                     "sms_provider": "smsbower",
                     "hero_sms_api_key": "sms-key",
                 }
@@ -1906,7 +1906,7 @@ class PhoneFlowRuntimeTests(unittest.TestCase):
         self.assertEqual(payload["attempts"][-1]["note"], "test")
 
     def test_classify_phone_flow_error_uses_typed_recovery(self):
-        classified = flow._classify_phone_flow_error("hero_sms_code_timeout")
+        classified = flow._classify_phone_flow_error("sms_code_timeout")
         self.assertEqual(classified.code, "sms_timeout")
         self.assertTrue(classified.retryable)
         self.assertEqual(classified.recovery_action, "resend_or_replace_phone")
@@ -1937,7 +1937,7 @@ class PhoneFlowRuntimeTests(unittest.TestCase):
         with patch.object(flow, "datetime", SteppingDatetime), \
              patch.object(flow, "_hero_sms_request", return_value="STATUS_WAIT_CODE"), \
              patch.object(flow.time, "sleep"):
-            with self.assertRaisesRegex(RuntimeError, "hero_sms_code_timeout"):
+            with self.assertRaisesRegex(RuntimeError, "sms_code_timeout"):
                 flow.poll_hero_sms_code(config, "act-1", on_progress=progress.append, progress_interval=5)
 
         self.assertGreaterEqual(len(progress), 1)
@@ -1963,7 +1963,7 @@ class PhoneFlowRuntimeTests(unittest.TestCase):
         with patch.object(flow, "datetime", SteppingDatetime), \
              patch.object(flow, "_hero_sms_request", return_value="STATUS_WAIT_CODE"), \
              patch.object(flow.time, "sleep"):
-            with self.assertRaisesRegex(RuntimeError, "hero_sms_code_timeout"):
+            with self.assertRaisesRegex(RuntimeError, "sms_code_timeout"):
                 flow.poll_hero_sms_code(
                     config,
                     "act-1",
@@ -2488,19 +2488,19 @@ class HeroPhoneBindAboutYouFallbackTests(unittest.TestCase):
 
         payload = {
             "hero_sms_api_key": "k",
-            "hero_sms_auto_retry": False,
-            "hero_sms_wait_timeout": 120,
+            "sms_auto_retry": False,
+            "sms_wait_timeout": 120,
         }
 
         with patch("regpilot.api_tasks.acquire_hero_sms_phone", return_value={"phone_number": "+15551234567", "activation_id": "act-1"}), \
-             patch("regpilot.api_tasks.poll_hero_sms_code", side_effect=RuntimeError("hero_sms_code_timeout")), \
+             patch("regpilot.api_tasks.poll_hero_sms_code", side_effect=RuntimeError("sms_code_timeout")), \
              patch("regpilot.api_tasks.PlatformRegistrar", DummyRegistrar), \
              patch("regpilot.api_tasks._probe_phone_signup_password_page", return_value={"status": 200, "ok": True, "matched": True, "final_url": "https://auth.openai.com/u/signup/password?state=abc", "title": "Create your password", "text": ""}), \
              patch("regpilot.api_tasks.set_hero_sms_status") as mock_set_status:
             with self.assertRaises(RuntimeError) as ctx:
                 _hero_phone_bind(payload)
 
-        self.assertIn("hero_sms_code_timeout", str(ctx.exception))
+        self.assertIn("sms_code_timeout", str(ctx.exception))
         mock_set_status.assert_called_with(unittest.mock.ANY, "act-1", 8)
 
     def test_phone_bind_does_not_finish_sms_order_before_openai_otp_success(self):
@@ -2528,8 +2528,8 @@ class HeroPhoneBindAboutYouFallbackTests(unittest.TestCase):
 
         payload = {
             "hero_sms_api_key": "k",
-            "hero_sms_auto_retry": False,
-            "hero_sms_wait_timeout": 120,
+            "sms_auto_retry": False,
+            "sms_wait_timeout": 120,
         }
 
         with patch("regpilot.api_tasks.acquire_hero_sms_phone", return_value={"phone_number": "+15551234567", "activation_id": "act-1"}), \
@@ -2573,8 +2573,8 @@ class HeroPhoneBindAboutYouFallbackTests(unittest.TestCase):
 
         payload = {
             "hero_sms_api_key": "k",
-            "hero_sms_auto_retry": False,
-            "hero_sms_wait_timeout": 120,
+            "sms_auto_retry": False,
+            "sms_wait_timeout": 120,
         }
         registrar_instances = []
         poll_kwargs = {}
@@ -2588,7 +2588,7 @@ class HeroPhoneBindAboutYouFallbackTests(unittest.TestCase):
             poll_kwargs.update(_kwargs)
             if on_resend:
                 on_resend()
-            raise RuntimeError("hero_sms_code_timeout")
+            raise RuntimeError("sms_code_timeout")
 
         with patch("regpilot.api_tasks.acquire_hero_sms_phone", return_value={"phone_number": "+15551234567", "activation_id": "act-1"}), \
              patch("regpilot.api_tasks.poll_hero_sms_code", side_effect=fake_poll), \
@@ -2656,7 +2656,7 @@ class HeroPhoneBindAboutYouFallbackTests(unittest.TestCase):
 
         payload = {
             "hero_sms_api_key": "k",
-            "hero_sms_auto_retry": True,
+            "sms_auto_retry": True,
         }
 
         acquire_results = [
@@ -2664,7 +2664,7 @@ class HeroPhoneBindAboutYouFallbackTests(unittest.TestCase):
             {"phone_number": "+15550000002", "activation_id": "act-2"},
             {"phone_number": "+15550000003", "activation_id": "act-3"},
         ]
-        poll_results = [RuntimeError("hero_sms_code_timeout"), RuntimeError("hero_sms_code_timeout"), "123456"]
+        poll_results = [RuntimeError("sms_code_timeout"), RuntimeError("sms_code_timeout"), "123456"]
 
         with patch("regpilot.api_tasks.acquire_hero_sms_phone", side_effect=acquire_results), \
              patch("regpilot.api_tasks.poll_hero_sms_code", side_effect=poll_results), \
@@ -3656,13 +3656,13 @@ class StabilityTests(unittest.TestCase):
             out = fastapi_api.api_save_config(
                 fastapi_api.ConfigSaveRequest(
                     section="hero_phone_bind",
-                    values={"hero_sms_auto_retry": "false", "hero_sms_retry_count": "5"},
+                    values={"sms_auto_retry": "false", "sms_retry_count": "5"},
                 )
             )
 
         self.assertTrue(out["ok"])
-        self.assertIs(out["config"]["hero_phone_bind"]["hero_sms_auto_retry"], False)
-        self.assertEqual(out["config"]["hero_phone_bind"]["hero_sms_retry_count"], 5)
+        self.assertIs(out["config"]["hero_phone_bind"]["sms_auto_retry"], False)
+        self.assertEqual(out["config"]["hero_phone_bind"]["sms_retry_count"], 5)
 
     def test_webui_config_save_preserves_optional_blank_integer_strings(self):
         with tempfile.TemporaryDirectory() as tmpdir, patch("regpilot.api_tasks.WEBUI_CONFIG_PATH", Path(tmpdir) / "webui_config.json"):
@@ -3681,13 +3681,13 @@ class StabilityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir, patch("regpilot.api_tasks.WEBUI_CONFIG_PATH", Path(tmpdir) / "webui_config.json"):
             with self.assertRaises(fastapi_api.HTTPException) as ctx:
                 fastapi_api.api_save_config(
-                    fastapi_api.ConfigSaveRequest(section="hero_phone_bind", values={"hero_sms_auto_retry": "maybe"})
+                    fastapi_api.ConfigSaveRequest(section="hero_phone_bind", values={"sms_auto_retry": "maybe"})
                 )
 
             self.assertFalse((Path(tmpdir) / "webui_config.json").exists())
 
         self.assertEqual(ctx.exception.status_code, 400)
-        self.assertEqual(ctx.exception.detail, "invalid_hero_sms_auto_retry")
+        self.assertEqual(ctx.exception.detail, "invalid_sms_auto_retry")
 
     def test_webui_config_save_rejects_invalid_integer_before_persist(self):
         with tempfile.TemporaryDirectory() as tmpdir, patch("regpilot.api_tasks.WEBUI_CONFIG_PATH", Path(tmpdir) / "webui_config.json"):
@@ -3713,8 +3713,8 @@ class StabilityTests(unittest.TestCase):
                         "codex2api_auto_import": "false",
                         "hero_sms_min_price": "0.01",
                         "hero_sms_max_price": "0.023",
-                        "hero_sms_auto_retry": "false",
-                        "hero_sms_retry_count": "7",
+                        "sms_auto_retry": "false",
+                        "sms_retry_count": "7",
                     }
                 ),
                 encoding="utf-8",
@@ -3734,7 +3734,7 @@ class StabilityTests(unittest.TestCase):
     def test_cli_flags_override_retry_config_only_when_present(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "config.json"
-            path.write_text(json.dumps({"hero_sms_auto_retry": True, "hero_sms_retry_count": 2}), encoding="utf-8")
+            path.write_text(json.dumps({"sms_auto_retry": True, "sms_retry_count": 2}), encoding="utf-8")
             args = cli.build_parser().parse_args(
                 ["register", "--config", str(path), "--no-hero-sms-auto-retry", "--hero-sms-retry-count", "4"]
             )
@@ -3832,7 +3832,7 @@ class StabilityTests(unittest.TestCase):
                 "cf_temp_admin_auth": "key",
                 "cf_temp_domain": "example.test",
                 "codex2api_auto_import": "false",
-                "hero_sms_auto_retry": "false",
+                "sms_auto_retry": "false",
                 "cf_temp_use_random_subdomain": "false",
                 "env_random_enabled": "false",
             }
@@ -3905,7 +3905,7 @@ class StabilityTests(unittest.TestCase):
 
         self.assertIn("function boolValue", html)
         self.assertIn("boolValue(h.env_random_enabled ?? r.env_random_enabled ?? false)", html)
-        self.assertIn("boolValue(h.hero_sms_auto_retry ?? r.hero_sms_auto_retry ?? false)", html)
+        self.assertIn("boolValue(h.sms_auto_retry ?? r.sms_auto_retry ?? h.hero_sms_auto_retry ?? r.hero_sms_auto_retry ?? false)", html)
 
     def test_reauthorize_job_rejects_unknown_sms_provider_before_job_start(self):
         payload = fastapi_api.ReauthorizeAutoRequest(account_id="acc-1", sms_provider="smsbwoer", hero_sms_api_key="sms-key")
@@ -4190,7 +4190,7 @@ class StabilityTests(unittest.TestCase):
             fastapi_api.api_task_hero_phone_bind(payload)
 
         self.assertEqual(ctx.exception.status_code, 400)
-        self.assertEqual(ctx.exception.detail, "invalid_hero_sms_price_range")
+        self.assertEqual(ctx.exception.detail, "invalid_sms_price_range")
         self.assertIn("最低价不能高于最高价", fastapi_api.FASTAPI_INDEX_HTML)
 
     def test_hero_phone_bind_preflight_rejects_non_finite_sms_price_before_job_start(self):
@@ -4211,14 +4211,14 @@ class StabilityTests(unittest.TestCase):
             fastapi_api.api_task_hero_phone_bind(payload)
 
         self.assertEqual(ctx.exception.status_code, 400)
-        self.assertEqual(ctx.exception.detail, "invalid_hero_sms_max_price")
+        self.assertEqual(ctx.exception.detail, "invalid_sms_max_price")
 
     def test_sms_price_lookup_rejects_invalid_values_before_provider_call(self):
         payload = fastapi_api.TaskRunRequest(
             values={
                 "sms_provider": "hero_sms",
                 "hero_sms_api_key": "sms-key",
-                "hero_sms_wait_timeout": "later",
+                "sms_wait_timeout": "later",
             }
         )
 
@@ -4228,7 +4228,7 @@ class StabilityTests(unittest.TestCase):
             fastapi_api.api_sms_price(payload)
 
         self.assertEqual(ctx.exception.status_code, 400)
-        self.assertEqual(ctx.exception.detail, "invalid_hero_sms_wait_timeout")
+        self.assertEqual(ctx.exception.detail, "invalid_sms_wait_timeout")
 
     def test_sms_country_lookup_rejects_missing_key_before_provider_call(self):
         payload = fastapi_api.TaskRunRequest(values={"sms_provider": "smsbower", "smsbower_api_key": ""})
@@ -4257,7 +4257,7 @@ class StabilityTests(unittest.TestCase):
             fastapi_api.api_sms_price(payload)
 
         self.assertEqual(ctx.exception.status_code, 400)
-        self.assertEqual(ctx.exception.detail, "invalid_hero_sms_price_range")
+        self.assertEqual(ctx.exception.detail, "invalid_sms_price_range")
 
     def test_reauthorize_sms_values_parses_saved_false_auto_retry(self):
         payload = fastapi_api.ReauthorizeAutoRequest(account_id="acc-1")
@@ -4269,13 +4269,13 @@ class StabilityTests(unittest.TestCase):
                 "hero_phone_bind": {
                     "sms_provider": "hero_sms",
                     "hero_sms_api_key": "sms-key",
-                    "hero_sms_auto_retry": "false",
+                    "sms_auto_retry": "false",
                 },
             },
         ):
             values = fastapi_api._prefer_reauthorize_sms_values(payload)
 
-        self.assertIs(values["hero_sms_auto_retry"], False)
+        self.assertIs(values["sms_auto_retry"], False)
 
     def test_reauthorize_sms_values_rejects_invalid_auto_retry_string(self):
         payload = fastapi_api.ReauthorizeAutoRequest(account_id="acc-1")
@@ -4288,14 +4288,14 @@ class StabilityTests(unittest.TestCase):
                      "hero_phone_bind": {
                          "sms_provider": "hero_sms",
                          "hero_sms_api_key": "sms-key",
-                         "hero_sms_auto_retry": "maybe",
+                         "sms_auto_retry": "maybe",
                      },
                  },
              ):
             fastapi_api._prefer_reauthorize_sms_values(payload)
 
         self.assertEqual(ctx.exception.status_code, 400)
-        self.assertEqual(ctx.exception.detail, "invalid_hero_sms_auto_retry")
+        self.assertEqual(ctx.exception.detail, "invalid_sms_auto_retry")
 
     def test_run_register_honors_requested_total_successes(self):
         results = [
