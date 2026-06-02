@@ -11,10 +11,7 @@ from .config import DATA_DIR
 from . import microsoft_mail_pool
 from .api_tasks import (
     JOBS,
-    _hero_country_lookup,
     _hero_phone_bind,
-    _hero_price_lookup,
-    _phone_direct,
     _run_job,
     _run_register,
 )
@@ -56,6 +53,18 @@ from .api_reauthorization import (
     api_reauthorize_auto_job,
     api_reauthorize_finish,
 )
+from .api_task_routes import (
+    router as task_router,
+    _hero_country_lookup,
+    _hero_price_lookup,
+    _phone_direct,
+    api_hero_countries,
+    api_sms_countries,
+    api_sms_price,
+    api_task_hero_phone_bind,
+    api_task_phone_direct,
+    api_task_register,
+)
 from .api_presenters import _safe_job, _zh_job_message
 from .account_status import _safe_account_with_status
 from .api_config_values import (
@@ -82,6 +91,7 @@ from .account_inspection import (
 )
 app = FastAPI(title="RegPilot API", version="0.1.0")
 app.include_router(microsoft_mail_router)
+app.include_router(task_router)
 
 
 def main() -> None:
@@ -148,53 +158,6 @@ def api_account_inspection_job(payload: AccountInspectionRequest) -> dict[str, A
 @app.post("/api/accounts/inspection/cpa-action")
 def api_account_inspection_cpa_action(payload: AccountInspectionCpaActionRequest) -> dict[str, Any]:
     return _run_cpa_auth_action(payload)
-
-
-@app.post("/api/tasks/register")
-def api_task_register(payload: TaskRunRequest) -> dict[str, Any]:
-    merged = _merge_task_values("register", payload.values or {})
-    _preflight_register(merged)
-    return _run_job("register", _run_register, merged)
-
-
-@app.post("/api/tasks/hero/phone-bind")
-def api_task_hero_phone_bind(payload: TaskRunRequest) -> dict[str, Any]:
-    merged = _merge_task_values("hero_phone_bind", payload.values or {})
-    _preflight_hero_phone_bind(merged)
-    return _run_job("phone_direct", _phone_direct, merged)
-
-
-@app.post("/api/tasks/phone-direct")
-def api_task_phone_direct(payload: TaskRunRequest) -> dict[str, Any]:
-    merged = _merge_task_values("phone_direct", payload.values or {})
-    _preflight_phone_direct(merged)
-    return _run_job("phone_direct", _phone_direct, merged)
-
-
-@app.post("/api/hero/countries")
-def api_hero_countries(payload: TaskRunRequest) -> dict[str, Any]:
-    return api_sms_countries(payload)
-
-
-@app.post("/api/sms/countries")
-def api_sms_countries(payload: TaskRunRequest) -> dict[str, Any]:
-    merged = _merge_task_values("hero_phone_bind", payload.values or {})
-    _preflight_sms_lookup(merged)
-    try:
-        return _hero_country_lookup(merged)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-
-
-@app.post("/api/sms/price")
-def api_sms_price(payload: TaskRunRequest) -> dict[str, Any]:
-    merged = _merge_task_values("hero_phone_bind", payload.values or {})
-    _preflight_sms_lookup(merged)
-    try:
-        return _hero_price_lookup(merged)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-
 
 
 configure_account_inspection(

@@ -3915,7 +3915,7 @@ class StabilityTests(unittest.TestCase):
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
              patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}, "hero_phone_bind": {}}), \
-             patch("regpilot.api._run_job", side_effect=AssertionError("job should not start")):
+             patch("regpilot.api_task_routes._run_job", side_effect=AssertionError("job should not start")):
             fastapi_api.api_task_hero_phone_bind(payload)
 
         self.assertEqual(ctx.exception.status_code, 400)
@@ -3926,7 +3926,7 @@ class StabilityTests(unittest.TestCase):
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
              patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}, "hero_phone_bind": {}}), \
-             patch("regpilot.api._run_job", side_effect=AssertionError("job should not start")):
+             patch("regpilot.api_task_routes._run_job", side_effect=AssertionError("job should not start")):
             fastapi_api.api_task_hero_phone_bind(payload)
 
         self.assertEqual(ctx.exception.status_code, 400)
@@ -3945,7 +3945,7 @@ class StabilityTests(unittest.TestCase):
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
              patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}, "hero_phone_bind": {}}), \
-             patch("regpilot.api._run_job", side_effect=AssertionError("job should not start")):
+             patch("regpilot.api_task_routes._run_job", side_effect=AssertionError("job should not start")):
             fastapi_api.api_task_hero_phone_bind(payload)
 
         self.assertEqual(ctx.exception.status_code, 400)
@@ -4028,7 +4028,7 @@ class StabilityTests(unittest.TestCase):
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
              patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}, "hero_phone_bind": {}}), \
-             patch("regpilot.api._run_job", side_effect=AssertionError("job should not start")):
+             patch("regpilot.api_task_routes._run_job", side_effect=AssertionError("job should not start")):
             fastapi_api.api_task_hero_phone_bind(payload)
 
         self.assertEqual(ctx.exception.status_code, 400)
@@ -4046,7 +4046,7 @@ class StabilityTests(unittest.TestCase):
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
              patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}, "hero_phone_bind": {}}), \
-             patch("regpilot.api._run_job", side_effect=AssertionError("job should not start")):
+             patch("regpilot.api_task_routes._run_job", side_effect=AssertionError("job should not start")):
             fastapi_api.api_reauthorize_auto_job(payload)
 
         self.assertEqual(ctx.exception.status_code, 400)
@@ -4152,7 +4152,7 @@ class StabilityTests(unittest.TestCase):
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
              patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}}), \
-             patch("regpilot.api._run_job", side_effect=AssertionError("job should not start")):
+             patch("regpilot.api_task_routes._run_job", side_effect=AssertionError("job should not start")):
             fastapi_api.api_task_register(payload)
 
         self.assertEqual(ctx.exception.status_code, 400)
@@ -4170,7 +4170,7 @@ class StabilityTests(unittest.TestCase):
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
              patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}}), \
-             patch("regpilot.api._run_job", side_effect=AssertionError("job should not start")):
+             patch("regpilot.api_task_routes._run_job", side_effect=AssertionError("job should not start")):
             fastapi_api.api_task_register(payload)
 
         self.assertEqual(ctx.exception.status_code, 400)
@@ -4187,7 +4187,7 @@ class StabilityTests(unittest.TestCase):
         )
 
         with patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}}), \
-             patch("regpilot.api._run_job", return_value={"ok": True, "job_id": "job-1"}) as mock_run:
+             patch("regpilot.api_task_routes._run_job", return_value={"ok": True, "job_id": "job-1"}) as mock_run:
             result = fastapi_api.api_task_register(payload)
 
         self.assertEqual(result["job_id"], "job-1")
@@ -4204,7 +4204,7 @@ class StabilityTests(unittest.TestCase):
 
         with patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}}), \
              patch.object(fastapi_api.microsoft_mail_pool, "count_available", return_value=1), \
-             patch("regpilot.api._run_job", return_value={"ok": True, "job_id": "job-1"}) as mock_run:
+             patch("regpilot.api_task_routes._run_job", return_value={"ok": True, "job_id": "job-1"}) as mock_run:
             result = fastapi_api.api_task_register(payload)
 
         self.assertEqual(result["job_id"], "job-1")
@@ -4222,7 +4222,7 @@ class StabilityTests(unittest.TestCase):
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
              patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}}), \
              patch.object(fastapi_api.microsoft_mail_pool, "count_available", return_value=0), \
-             patch("regpilot.api._run_job", side_effect=AssertionError("job should not start")):
+             patch("regpilot.api_task_routes._run_job", side_effect=AssertionError("job should not start")):
             fastapi_api.api_task_register(payload)
 
         self.assertEqual(ctx.exception.status_code, 400)
@@ -4233,7 +4233,7 @@ class StabilityTests(unittest.TestCase):
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
              patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}}), \
-             patch("regpilot.api._run_job", side_effect=AssertionError("job should not start")):
+             patch("regpilot.api_task_routes._run_job", side_effect=AssertionError("job should not start")):
             fastapi_api.api_task_register(payload)
 
         self.assertEqual(ctx.exception.status_code, 400)
@@ -4244,7 +4244,7 @@ class StabilityTests(unittest.TestCase):
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
              patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}}), \
-             patch("regpilot.api._run_job", side_effect=AssertionError("job should not start")):
+             patch("regpilot.api_task_routes._run_job", side_effect=AssertionError("job should not start")):
             fastapi_api.api_task_register(payload)
 
         self.assertEqual(ctx.exception.status_code, 400)
@@ -4256,7 +4256,7 @@ class StabilityTests(unittest.TestCase):
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
              patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}}), \
-             patch("regpilot.api._run_job", side_effect=AssertionError("job should not start")):
+             patch("regpilot.api_task_routes._run_job", side_effect=AssertionError("job should not start")):
             fastapi_api.api_task_register(payload)
 
         self.assertEqual(ctx.exception.status_code, 400)
@@ -4268,7 +4268,7 @@ class StabilityTests(unittest.TestCase):
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
              patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}}), \
-             patch("regpilot.api._run_job", side_effect=AssertionError("job should not start")):
+             patch("regpilot.api_task_routes._run_job", side_effect=AssertionError("job should not start")):
             fastapi_api.api_task_register(payload)
 
         self.assertEqual(ctx.exception.status_code, 400)
@@ -4281,7 +4281,7 @@ class StabilityTests(unittest.TestCase):
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
              patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}}), \
-             patch("regpilot.api._run_job", side_effect=AssertionError("job should not start")):
+             patch("regpilot.api_task_routes._run_job", side_effect=AssertionError("job should not start")):
             fastapi_api.api_task_register(payload)
 
         self.assertEqual(ctx.exception.status_code, 400)
@@ -4298,7 +4298,7 @@ class StabilityTests(unittest.TestCase):
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
              patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}, "hero_phone_bind": {}}), \
-             patch("regpilot.api._run_job", side_effect=AssertionError("job should not start")):
+             patch("regpilot.api_task_routes._run_job", side_effect=AssertionError("job should not start")):
             fastapi_api.api_task_hero_phone_bind(payload)
 
         self.assertEqual(ctx.exception.status_code, 400)
@@ -4320,7 +4320,7 @@ class StabilityTests(unittest.TestCase):
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
              patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}, "hero_phone_bind": {}}), \
-             patch("regpilot.api._run_job", side_effect=AssertionError("job should not start")):
+             patch("regpilot.api_task_routes._run_job", side_effect=AssertionError("job should not start")):
             fastapi_api.api_task_hero_phone_bind(payload)
 
         self.assertEqual(ctx.exception.status_code, 400)
@@ -4341,7 +4341,7 @@ class StabilityTests(unittest.TestCase):
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
              patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}, "hero_phone_bind": {}}), \
-             patch("regpilot.api._run_job", side_effect=AssertionError("job should not start")):
+             patch("regpilot.api_task_routes._run_job", side_effect=AssertionError("job should not start")):
             fastapi_api.api_task_hero_phone_bind(payload)
 
         self.assertEqual(ctx.exception.status_code, 400)
@@ -4358,7 +4358,7 @@ class StabilityTests(unittest.TestCase):
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
              patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}, "hero_phone_bind": {}}), \
-             patch("regpilot.api._hero_price_lookup", side_effect=AssertionError("provider should not be queried")):
+             patch("regpilot.api_task_routes._hero_price_lookup", side_effect=AssertionError("provider should not be queried")):
             fastapi_api.api_sms_price(payload)
 
         self.assertEqual(ctx.exception.status_code, 400)
@@ -4369,7 +4369,7 @@ class StabilityTests(unittest.TestCase):
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
              patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}, "hero_phone_bind": {}}), \
-             patch("regpilot.api._hero_country_lookup", side_effect=AssertionError("provider should not be queried")):
+             patch("regpilot.api_task_routes._hero_country_lookup", side_effect=AssertionError("provider should not be queried")):
             fastapi_api.api_sms_countries(payload)
 
         self.assertEqual(ctx.exception.status_code, 400)
@@ -4387,7 +4387,7 @@ class StabilityTests(unittest.TestCase):
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
              patch("regpilot.api_config_values._load_webui_config", return_value={"register": {}, "hero_phone_bind": {}}), \
-             patch("regpilot.api._hero_price_lookup", side_effect=AssertionError("provider should not be queried")):
+             patch("regpilot.api_task_routes._hero_price_lookup", side_effect=AssertionError("provider should not be queried")):
             fastapi_api.api_sms_price(payload)
 
         self.assertEqual(ctx.exception.status_code, 400)
