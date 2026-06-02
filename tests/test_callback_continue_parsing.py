@@ -5129,6 +5129,71 @@ class ReauthorizePhoneVerificationTests(unittest.TestCase):
         self.assertEqual(provider["imap_user"], "owner@icloud.com")
         self.assertEqual(provider["imap_password"], "app-pass")
 
+    def test_handle_email_otp_uses_webui_mail_provider_for_phone_signup_mailbox(self):
+        account = {
+            "id": "acc-1",
+            "email": "alias@icloud.com",
+            "password": "pw",
+            "source": "phone_signup",
+            "mailbox": {
+                "provider": "phone_signup",
+                "bind_email": "alias@icloud.com",
+                "phone_number": "+15551234567",
+                "phone_number_verified": True,
+            },
+        }
+        wait_configs = []
+        wait_mailboxes = []
+
+        class DummyRegistrar:
+            last_authorize = {"state": "state-1"}
+
+        def fake_wait(config, mailbox):
+            wait_configs.append(config)
+            wait_mailboxes.append(dict(mailbox))
+            mailbox["_last_code_meta"] = {"received_at_ms": 2001000}
+            return "123456"
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir, \
+             patch.object(reauth, "DATA_DIR", Path(tmpdir)), \
+             patch.object(reauth.time, "time", return_value=2000), \
+             patch.object(reauth, "wait_for_code", side_effect=fake_wait), \
+             patch.object(reauth, "_validate_login_otp", return_value={"ok": True, "status": 200, "json": {"continue_url": "http://localhost:1455/auth/callback?code=cb&state=state-1"}}), \
+             patch.object(reauth, "_resolve_callback_step", return_value="http://localhost:1455/auth/callback?code=cb&state=state-1"):
+            Path(tmpdir, "webui_config.json").write_text(
+                json.dumps(
+                    {
+                        "hero_phone_bind": {
+                            "mail_type": "icloud",
+                            "icloud_imap_user": "owner@icloud.com",
+                            "icloud_imap_password": "app-pass",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            callback, _validate_info, _debug = reauth._handle_email_otp_step(
+                DummyRegistrar(),
+                account,
+                account["mailbox"],
+                "state-1",
+                proxy="",
+                wait_timeout=60,
+                wait_interval=2,
+                request_timeout=30,
+            )
+
+        self.assertEqual(callback, "http://localhost:1455/auth/callback?code=cb&state=state-1")
+        self.assertEqual(wait_mailboxes[0]["provider"], "icloud")
+        self.assertEqual(wait_mailboxes[0]["email"], "alias@icloud.com")
+        self.assertEqual(account["mailbox"]["provider"], "phone_signup")
+        self.assertEqual(account["mailbox"]["_last_code_meta"]["received_at_ms"], 2001000)
+        provider = wait_configs[0].mail.providers[0]
+        self.assertEqual(provider["type"], "icloud")
+        self.assertEqual(provider["email"], "alias@icloud.com")
+        self.assertEqual(provider["imap_user"], "owner@icloud.com")
+        self.assertEqual(provider["imap_password"], "app-pass")
+
     def test_handle_email_otp_discards_stale_quick_check_code(self):
         account = {
             "id": "acc-1",

@@ -560,6 +560,9 @@ def _normalize_mail_provider_name(value: Any) -> str:
     return raw
 
 
+_SUPPORTED_MAIL_PROVIDER_NAMES = {"icloud", "cloudflare-temp-email", "hotmail-api"}
+
+
 def _first_text(*values: Any) -> str:
     for value in values:
         if value is None:
@@ -567,6 +570,50 @@ def _first_text(*values: Any) -> str:
         text = str(value).strip()
         if text:
             return text
+    return ""
+
+
+def _webui_mail_section_names_for_account(account: dict[str, Any]) -> tuple[str, ...]:
+    source = str(account.get("source") or "").strip().lower()
+    if source in {"phone_signup", "phone_direct", "hero_phone_bind"}:
+        return ("hero_phone_bind", "phone_direct", "register")
+    return ("register", "hero_phone_bind", "phone_direct")
+
+
+def _load_webui_default_mail_provider_name(account: dict[str, Any]) -> str:
+    path = DATA_DIR / "webui_config.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        return ""
+    for section_name in _webui_mail_section_names_for_account(account):
+        section = data.get(section_name)
+        if not isinstance(section, dict):
+            continue
+        mail_type = _normalize_mail_provider_name(section.get("mail_type") or "")
+        if mail_type in _SUPPORTED_MAIL_PROVIDER_NAMES:
+            return mail_type
+    return ""
+
+
+def _mail_target_email_for_account(account: dict[str, Any], mailbox: dict[str, Any]) -> str:
+    email = _first_text(mailbox.get("email"), mailbox.get("bind_email"), account.get("email"))
+    return email if "@" in email else ""
+
+
+def _mail_provider_name_for_account(account: dict[str, Any], mailbox: dict[str, Any]) -> str:
+    for value in (mailbox.get("provider"), mailbox.get("mail_provider"), mailbox.get("email_provider")):
+        provider_name = _normalize_mail_provider_name(value)
+        if provider_name in _SUPPORTED_MAIL_PROVIDER_NAMES:
+            return provider_name
+    provider_name = _load_webui_default_mail_provider_name(account)
+    if provider_name:
+        return provider_name
+    email = _mail_target_email_for_account(account, mailbox).lower()
+    if email.endswith(("@icloud.com", "@me.com", "@mac.com")):
+        return "icloud"
     return ""
 
 
@@ -644,7 +691,7 @@ def _load_webui_cloudflare_fallback_provider() -> dict[str, Any]:
 
 
 def _mailbox_mail_provider_config(account: dict[str, Any], mailbox: dict[str, Any]) -> dict[str, Any]:
-    provider_name = _normalize_mail_provider_name(mailbox.get("provider"))
+    provider_name = _mail_provider_name_for_account(account, mailbox)
     if not provider_name:
         return {}
     provider = dict(_load_webui_mail_defaults(provider_name))
@@ -684,12 +731,33 @@ def _mailbox_mail_provider_config(account: dict[str, Any], mailbox: dict[str, An
             provider[key] = value
     if isinstance(mailbox.get("cookies"), dict):
         provider["cookies"] = mailbox["cookies"]
-    email = _first_text(mailbox.get("email"), account.get("email"), provider.get("email"))
-    if email and "@" not in email:
-        email = ""
+    email = _first_text(_mail_target_email_for_account(account, mailbox), provider.get("email"))
     if email:
         provider["email"] = email
     return provider
+
+
+def _mailbox_for_mail_wait(account: dict[str, Any], mailbox: dict[str, Any]) -> dict[str, Any]:
+    provider_name = _mail_provider_name_for_account(account, mailbox)
+    email = _mail_target_email_for_account(account, mailbox)
+    if not provider_name:
+        return mailbox
+    current_provider = _normalize_mail_provider_name(mailbox.get("provider"))
+    if current_provider == provider_name and str(mailbox.get("email") or "").strip():
+        return mailbox
+    wait_mailbox = dict(mailbox)
+    wait_mailbox["provider"] = provider_name
+    if email:
+        wait_mailbox["email"] = email
+    return wait_mailbox
+
+
+def _sync_mail_wait_state(source: dict[str, Any], target: dict[str, Any]) -> None:
+    if source is target:
+        return
+    for key in ("_last_code_meta", "_exclude_codes"):
+        if key in source:
+            target[key] = source[key]
 
 
 def _mail_wait_config_for_account(
@@ -1169,7 +1237,9 @@ def _handle_email_otp_step(
     request_timeout: int,
 ) -> tuple[str, dict[str, Any], dict[str, Any]]:
     def _wait_code_after(mail_cfg: RegisterConfig, mb: dict[str, Any]) -> str:
-        code_value = str(wait_for_code(mail_cfg, mb) or "").strip()
+        wait_mb = _mailbox_for_mail_wait(account, mb)
+        code_value = str(wait_for_code(mail_cfg, wait_mb) or "").strip()
+        _sync_mail_wait_state(wait_mb, mb)
         if not code_value:
             return ""
         meta = mb.get("_last_code_meta") if isinstance(mb.get("_last_code_meta"), dict) else {}
@@ -1182,14 +1252,20 @@ def _handle_email_otp_step(
             if code_value and code_value not in excluded:
                 excluded.append(code_value)
                 mb["_exclude_codes"] = excluded
-            return str(wait_for_code(mail_cfg, mb) or "").strip()
+            wait_mb = _mailbox_for_mail_wait(account, mb)
+            code_value = str(wait_for_code(mail_cfg, wait_mb) or "").strip()
+            _sync_mail_wait_state(wait_mb, mb)
+            return code_value
         if threshold_ms > 0 and code_received_ms > 0 and code_received_ms < stale_before_ms:
             _log_stage(f"命中旧邮箱验证码，已丢弃并重试：code_received_ms={code_received_ms} < code_after_ts={threshold_ms}")
             excluded = list(mb.get("_exclude_codes") or [])
             if code_value and code_value not in excluded:
                 excluded.append(code_value)
                 mb["_exclude_codes"] = excluded
-            return str(wait_for_code(mail_cfg, mb) or "").strip()
+            wait_mb = _mailbox_for_mail_wait(account, mb)
+            code_value = str(wait_for_code(mail_cfg, wait_mb) or "").strip()
+            _sync_mail_wait_state(wait_mb, mb)
+            return code_value
         return code_value
 
     _log_stage("快速检查邮箱里是否已有可用验证码")
@@ -2783,6 +2859,7 @@ def auto_reauthorize_account_with_email_otp(
                 updated = _mark_reauthorize_failed(account, f"send_otp_{otp_info.get('status') or 0}", mailbox=mailbox)
                 return ReauthorizeAutoOutcome(ok=False, message=account["last_error"], account=updated, debug=debug)
             _log_stage("等待邮箱验证码")
+            wait_mailbox = _mailbox_for_mail_wait(account, mailbox)
             code = str(
                 wait_for_code(
                     _mail_wait_config_for_account(
@@ -2793,10 +2870,11 @@ def auto_reauthorize_account_with_email_otp(
                         wait_interval=wait_interval,
                         request_timeout=request_timeout,
                     ),
-                    mailbox,
+                    wait_mailbox,
                 )
                 or ""
             ).strip()
+            _sync_mail_wait_state(wait_mailbox, mailbox)
             _log_stage(f"邮箱验证码接收结果：{'已收到' if code else '等待超时'}")
             if not code:
                 updated = _mark_reauthorize_failed(account, "wait_for_code_timeout", mailbox=mailbox)
