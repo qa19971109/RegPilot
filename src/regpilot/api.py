@@ -10,7 +10,6 @@ from .accounts_store import get_account, init_db
 from .config import DATA_DIR
 from . import microsoft_mail_pool
 from .api_tasks import (
-    JOBS,
     _hero_phone_bind,
     _run_job,
     _run_register,
@@ -65,6 +64,12 @@ from .api_task_routes import (
     api_task_phone_direct,
     api_task_register,
 )
+from .api_jobs import (
+    router as jobs_router,
+    api_job,
+    api_job_stop,
+    api_jobs,
+)
 from .api_presenters import _safe_job, _zh_job_message
 from .account_status import _safe_account_with_status
 from .api_config_values import (
@@ -92,6 +97,7 @@ from .account_inspection import (
 app = FastAPI(title="RegPilot API", version="0.1.0")
 app.include_router(microsoft_mail_router)
 app.include_router(task_router)
+app.include_router(jobs_router)
 
 
 def main() -> None:
@@ -170,32 +176,6 @@ configure_account_inspection(
         zh_job_message=_zh_job_message,
     )
 )
-
-
-@app.get("/api/jobs")
-def api_jobs() -> dict[str, Any]:
-    return {"ok": True, "items": [_safe_job(job) for job in JOBS.list()]}
-
-
-@app.get("/api/jobs/{job_id}")
-def api_job(job_id: str) -> dict[str, Any]:
-    for job in JOBS.list():
-        if job.get("id") == job_id:
-            return {"ok": True, "item": _safe_job(job)}
-    raise HTTPException(status_code=404, detail="job_not_found")
-
-
-@app.post("/api/jobs/{job_id}/stop")
-def api_job_stop(job_id: str) -> dict[str, Any]:
-    try:
-        result = JOBS.request_stop(job_id)
-    except ValueError as exc:
-        if str(exc) == "job_not_found":
-            raise HTTPException(status_code=404, detail="job_not_found")
-        raise
-    return {"ok": True, **result}
-
-
 
 
 app.include_router(reauthorization_router)
