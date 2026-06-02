@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from regpilot import accounts_store
+from regpilot import account_inspection as inspection
 from regpilot import api as fastapi_api
 
 
@@ -18,10 +19,10 @@ class AccountInspectionTests(unittest.TestCase):
         account = {"id": "acc-1", "email": "user@example.test", "password": "pw", "mailbox": {"provider": "icloud"}}
         outcome = SimpleNamespace(ok=True, message="CPA callback submitted", account={**account, "status": "authorized"})
 
-        with patch("regpilot.api._accounts_for_inspection", return_value=[account]), \
-             patch("regpilot.api._codex_account_test", return_value={"ok": False, "account_id": "acc-1", "email": "user@example.test", "status_code": 401, "error": "unauthorized"}), \
-             patch("regpilot.api.auto_reauthorize_account_with_email_otp", return_value=outcome) as mock_reauth, \
-             patch("regpilot.api._mark_account_delete_pending", side_effect=AssertionError("should not mark delete")):
+        with patch("regpilot.account_inspection._accounts_for_inspection", return_value=[account]), \
+             patch("regpilot.account_inspection._codex_account_test", return_value={"ok": False, "account_id": "acc-1", "email": "user@example.test", "status_code": 401, "error": "unauthorized"}), \
+             patch("regpilot.account_inspection.auto_reauthorize_account_with_email_otp", return_value=outcome) as mock_reauth, \
+             patch("regpilot.account_inspection._mark_account_delete_pending", side_effect=AssertionError("should not mark delete")):
             result = fastapi_api._run_account_inspection(payload, {})
 
         self.assertEqual(result["checked_count"], 1)
@@ -46,9 +47,9 @@ class AccountInspectionTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir, \
              patch.object(accounts_store, "DB_PATH", Path(tmpdir) / "accounts.db"), \
-             patch("regpilot.api._accounts_for_inspection", return_value=[account]), \
-             patch("regpilot.api._codex_account_test", return_value={"ok": False, "account_id": "acc-1", "email": "user@example.test", "status_code": 401, "error": "unauthorized"}), \
-             patch("regpilot.api.auto_reauthorize_account_with_email_otp", return_value=outcome):
+             patch("regpilot.account_inspection._accounts_for_inspection", return_value=[account]), \
+             patch("regpilot.account_inspection._codex_account_test", return_value={"ok": False, "account_id": "acc-1", "email": "user@example.test", "status_code": 401, "error": "unauthorized"}), \
+             patch("regpilot.account_inspection.auto_reauthorize_account_with_email_otp", return_value=outcome):
             accounts_store.upsert_account(account)
             result = fastapi_api._run_account_inspection(payload, {})
             saved = accounts_store.get_account("acc-1")
@@ -63,9 +64,9 @@ class AccountInspectionTests(unittest.TestCase):
         payload = fastapi_api.AccountInspectionRequest(account_ids=["acc-1"], use_cpa_test=False)
         account = {"id": "acc-1", "email": "user@example.test"}
 
-        with patch("regpilot.api._accounts_for_inspection", return_value=[account]), \
-             patch("regpilot.api._codex_account_test", return_value={"ok": False, "account_id": "acc-1", "email": "user@example.test", "status_code": 429, "error": "usage limit"}), \
-             patch("regpilot.api.auto_reauthorize_account_with_email_otp", side_effect=AssertionError("should not reauthorize")):
+        with patch("regpilot.account_inspection._accounts_for_inspection", return_value=[account]), \
+             patch("regpilot.account_inspection._codex_account_test", return_value={"ok": False, "account_id": "acc-1", "email": "user@example.test", "status_code": 429, "error": "usage limit"}), \
+             patch("regpilot.account_inspection.auto_reauthorize_account_with_email_otp", side_effect=AssertionError("should not reauthorize")):
             result = fastapi_api._run_account_inspection(payload, {})
 
         self.assertEqual(result["unauthorized_count"], 0)
@@ -78,10 +79,10 @@ class AccountInspectionTests(unittest.TestCase):
         account = {"id": "acc-1", "email": "user@example.test"}
         auth_file = {"auth_index": "codex-1", "name": "user_example_test.json", "email": "user@example.test"}
 
-        with patch("regpilot.api._accounts_for_inspection", return_value=[account]), \
-             patch("regpilot.api._cpa_auth_files", return_value=[auth_file]) as mock_files, \
-             patch("regpilot.api._cpa_auth_test", return_value={"ok": True, "account_id": "acc-1", "email": "user@example.test", "auth_index": "codex-1", "auth_name": "user_example_test.json", "status_code": 200, "text": "CPA_AUTH_TEST_OK"}), \
-             patch("regpilot.api._codex_account_test", side_effect=AssertionError("should use CPA test")):
+        with patch("regpilot.account_inspection._accounts_for_inspection", return_value=[account]), \
+             patch("regpilot.account_inspection._cpa_auth_files", return_value=[auth_file]) as mock_files, \
+             patch("regpilot.account_inspection._cpa_auth_test", return_value={"ok": True, "account_id": "acc-1", "email": "user@example.test", "auth_index": "codex-1", "auth_name": "user_example_test.json", "status_code": 200, "text": "CPA_AUTH_TEST_OK"}), \
+             patch("regpilot.account_inspection._codex_account_test", side_effect=AssertionError("should use CPA test")):
             result = fastapi_api._run_account_inspection(payload, {})
 
         self.assertTrue(result["use_cpa_test"])
@@ -94,11 +95,11 @@ class AccountInspectionTests(unittest.TestCase):
         payload = fastapi_api.AccountInspectionRequest(codex2api_url="http://cpa.test", codex2api_admin_key="key")
         auth_file = {"auth_index": "codex-1", "name": "cpa-only.json", "email": "cpa-only@example.test"}
 
-        with patch("regpilot.api._accounts_for_inspection", side_effect=AssertionError("all CPA inspection should not use account pool as target source")), \
-             patch("regpilot.api._cpa_auth_files", return_value=[auth_file]), \
-             patch("regpilot.api.count_accounts", return_value=0), \
-             patch("regpilot.api.list_accounts", return_value=[]), \
-             patch("regpilot.api._cpa_auth_test", return_value={"ok": True, "account_id": "", "email": "cpa-only@example.test", "auth_index": "codex-1", "auth_name": "cpa-only.json", "status_code": 200, "text": "CPA_AUTH_TEST_OK"}):
+        with patch("regpilot.account_inspection._accounts_for_inspection", side_effect=AssertionError("all CPA inspection should not use account pool as target source")), \
+             patch("regpilot.account_inspection._cpa_auth_files", return_value=[auth_file]), \
+             patch("regpilot.account_inspection.count_accounts", return_value=0), \
+             patch("regpilot.account_inspection.list_accounts", return_value=[]), \
+             patch("regpilot.account_inspection._cpa_auth_test", return_value={"ok": True, "account_id": "", "email": "cpa-only@example.test", "auth_index": "codex-1", "auth_name": "cpa-only.json", "status_code": 200, "text": "CPA_AUTH_TEST_OK"}):
             result = fastapi_api._run_account_inspection(payload, {})
 
         self.assertEqual(result["target_source"], "cpa_auth_files")
@@ -107,7 +108,7 @@ class AccountInspectionTests(unittest.TestCase):
 
     def test_cpa_auth_files_excludes_usage_stats_file(self):
         with patch(
-            "regpilot.api._cpa_request",
+            "regpilot.account_inspection._cpa_request",
             return_value={
                 "files": [
                     {"name": "usage-stats.json"},
@@ -116,7 +117,7 @@ class AccountInspectionTests(unittest.TestCase):
                 ]
             },
         ):
-            files = fastapi_api._cpa_auth_files("http://cpa.test", "key")
+            files = inspection._cpa_auth_files("http://cpa.test", "key")
 
         self.assertEqual(files, [{"name": "user.json", "auth_index": "codex-1"}])
 
@@ -126,7 +127,7 @@ class AccountInspectionTests(unittest.TestCase):
         account = {"id": "acc-1", "email": "user@example.test", "_cpa_auth_file": auth_file}
 
         with patch(
-            "regpilot.api._cpa_codex_usage_probe",
+            "regpilot.account_inspection._cpa_codex_usage_probe",
             return_value={
                 "has_status_code": True,
                 "status_code": 200,
@@ -135,7 +136,7 @@ class AccountInspectionTests(unittest.TestCase):
                 "error": "",
             },
         ):
-            result = fastapi_api._cpa_auth_test(account, payload, [auth_file])
+            result = inspection._cpa_auth_test(account, payload, [auth_file])
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["action"], "cpa_usage_available")
@@ -149,7 +150,7 @@ class AccountInspectionTests(unittest.TestCase):
         account = {"id": "acc-1", "email": "user@example.test", "_cpa_auth_file": auth_file}
 
         with patch(
-            "regpilot.api._cpa_codex_usage_probe",
+            "regpilot.account_inspection._cpa_codex_usage_probe",
             return_value={
                 "has_status_code": True,
                 "status_code": 200,
@@ -158,7 +159,7 @@ class AccountInspectionTests(unittest.TestCase):
                 "error": "",
             },
         ):
-            result = fastapi_api._cpa_auth_test(account, payload, [auth_file])
+            result = inspection._cpa_auth_test(account, payload, [auth_file])
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["action"], "cpa_keep")
@@ -170,7 +171,7 @@ class AccountInspectionTests(unittest.TestCase):
         account = {"id": "acc-1", "email": "user@example.test", "_cpa_auth_file": auth_file}
 
         with patch(
-            "regpilot.api._cpa_codex_usage_probe",
+            "regpilot.account_inspection._cpa_codex_usage_probe",
             return_value={
                 "has_status_code": True,
                 "status_code": 200,
@@ -179,7 +180,7 @@ class AccountInspectionTests(unittest.TestCase):
                 "error": "",
             },
         ):
-            result = fastapi_api._cpa_auth_test(account, payload, [auth_file])
+            result = inspection._cpa_auth_test(account, payload, [auth_file])
 
         self.assertEqual(result["action"], "cpa_usage_limit_reached")
         self.assertEqual(result["usage_state"], "limit_reached")
@@ -189,11 +190,11 @@ class AccountInspectionTests(unittest.TestCase):
         payload = fastapi_api.AccountInspectionRequest(codex2api_url="http://cpa.test", codex2api_admin_key="key")
         auth_file = {"auth_index": "codex-1", "name": "disabled.json", "email": "cpa-only@example.test", "status": "disabled"}
 
-        with patch("regpilot.api._cpa_auth_files", return_value=[auth_file]), \
-             patch("regpilot.api.count_accounts", return_value=0), \
-             patch("regpilot.api.list_accounts", return_value=[]), \
-             patch("regpilot.api._cpa_codex_usage_probe", return_value={"has_status_code": True, "status_code": 200, "payload": {"rate_limit": {"secondary_window": {"limit_window_seconds": 604800, "used_percent": 100}}}, "body_text": "", "error": ""}), \
-             patch("regpilot.api.auto_reauthorize_account_with_email_otp", side_effect=AssertionError("disabled auth should not reauthorize")):
+        with patch("regpilot.account_inspection._cpa_auth_files", return_value=[auth_file]), \
+             patch("regpilot.account_inspection.count_accounts", return_value=0), \
+             patch("regpilot.account_inspection.list_accounts", return_value=[]), \
+             patch("regpilot.account_inspection._cpa_codex_usage_probe", return_value={"has_status_code": True, "status_code": 200, "payload": {"rate_limit": {"secondary_window": {"limit_window_seconds": 604800, "used_percent": 100}}}, "body_text": "", "error": ""}), \
+             patch("regpilot.account_inspection.auto_reauthorize_account_with_email_otp", side_effect=AssertionError("disabled auth should not reauthorize")):
             result = fastapi_api._run_account_inspection(payload, {})
 
         self.assertEqual(result["checked_count"], 1)
@@ -206,11 +207,11 @@ class AccountInspectionTests(unittest.TestCase):
         payload = fastapi_api.AccountInspectionRequest(codex2api_url="http://cpa.test", codex2api_admin_key="key")
         auth_file = {"auth_index": "codex-1", "name": "cpa-only.json", "email": "cpa-only@example.test"}
 
-        with patch("regpilot.api._cpa_auth_files", return_value=[auth_file]), \
-             patch("regpilot.api.count_accounts", return_value=0), \
-             patch("regpilot.api.list_accounts", return_value=[]), \
-             patch("regpilot.api._cpa_auth_test", return_value={"ok": False, "account_id": "", "email": "cpa-only@example.test", "auth_index": "codex-1", "auth_name": "cpa-only.json", "status_code": 401, "error": "unauthorized", "action": "cpa_auth_invalid", "inspection_source": "cpa_quota"}), \
-             patch("regpilot.api.auto_reauthorize_account_with_email_otp", side_effect=AssertionError("no local account should not reauthorize")):
+        with patch("regpilot.account_inspection._cpa_auth_files", return_value=[auth_file]), \
+             patch("regpilot.account_inspection.count_accounts", return_value=0), \
+             patch("regpilot.account_inspection.list_accounts", return_value=[]), \
+             patch("regpilot.account_inspection._cpa_auth_test", return_value={"ok": False, "account_id": "", "email": "cpa-only@example.test", "auth_index": "codex-1", "auth_name": "cpa-only.json", "status_code": 401, "error": "unauthorized", "action": "cpa_auth_invalid", "inspection_source": "cpa_quota"}), \
+             patch("regpilot.account_inspection.auto_reauthorize_account_with_email_otp", side_effect=AssertionError("no local account should not reauthorize")):
             result = fastapi_api._run_account_inspection(payload, {})
 
         self.assertEqual(result["unauthorized_count"], 1)
@@ -224,11 +225,11 @@ class AccountInspectionTests(unittest.TestCase):
         account = {"id": "acc-1", "email": "user@example.test", "_cpa_auth_file": auth_file}
         outcome = SimpleNamespace(ok=True, message="CPA callback submitted", account={**account, "status": "authorized"})
 
-        with patch("regpilot.api._accounts_for_inspection", return_value=[account]), \
-             patch("regpilot.api._cpa_auth_files", return_value=[auth_file]), \
-             patch("regpilot.api._cpa_auth_test", return_value={"ok": False, "account_id": "acc-1", "email": "user@example.test", "auth_index": "codex-1", "auth_name": "user.json", "status_code": 401, "error": "unauthorized", "action": "cpa_auth_invalid", "inspection_source": "cpa_quota"}), \
-             patch("regpilot.api.auto_reauthorize_account_with_email_otp", return_value=outcome) as mock_reauth, \
-             patch("regpilot.api._mark_account_delete_pending", side_effect=AssertionError("should not mark delete before phone verification")):
+        with patch("regpilot.account_inspection._accounts_for_inspection", return_value=[account]), \
+             patch("regpilot.account_inspection._cpa_auth_files", return_value=[auth_file]), \
+             patch("regpilot.account_inspection._cpa_auth_test", return_value={"ok": False, "account_id": "acc-1", "email": "user@example.test", "auth_index": "codex-1", "auth_name": "user.json", "status_code": 401, "error": "unauthorized", "action": "cpa_auth_invalid", "inspection_source": "cpa_quota"}), \
+             patch("regpilot.account_inspection.auto_reauthorize_account_with_email_otp", return_value=outcome) as mock_reauth, \
+             patch("regpilot.account_inspection._mark_account_delete_pending", side_effect=AssertionError("should not mark delete before phone verification")):
             result = fastapi_api._run_account_inspection(payload, {})
 
         self.assertEqual(result["items"][0]["action"], "reauthorized")
@@ -263,10 +264,10 @@ class AccountInspectionTests(unittest.TestCase):
             account = next(item for item in accounts if item["id"] == account_id)
             return SimpleNamespace(ok=True, message="CPA callback submitted", account={**account, "status": "authorized"})
 
-        with patch("regpilot.api._accounts_for_inspection", return_value=accounts), \
-             patch("regpilot.api._cpa_auth_files", return_value=auth_files), \
-             patch("regpilot.api._cpa_auth_test", side_effect=fake_test), \
-             patch("regpilot.api.auto_reauthorize_account_with_email_otp", side_effect=fake_reauthorize):
+        with patch("regpilot.account_inspection._accounts_for_inspection", return_value=accounts), \
+             patch("regpilot.account_inspection._cpa_auth_files", return_value=auth_files), \
+             patch("regpilot.account_inspection._cpa_auth_test", side_effect=fake_test), \
+             patch("regpilot.account_inspection.auto_reauthorize_account_with_email_otp", side_effect=fake_reauthorize):
             result = fastapi_api._run_account_inspection(payload, {})
 
         self.assertEqual(result["reauthorized_count"], 2)
@@ -282,7 +283,7 @@ class AccountInspectionTests(unittest.TestCase):
                 return {"files": [{"auth_index": "codex-1", "name": "user.json"}]}
             return {"status": "ok", "disabled": True}
 
-        with patch("regpilot.api._cpa_request", side_effect=fake_request):
+        with patch("regpilot.account_inspection._cpa_request", side_effect=fake_request):
             result = fastapi_api.api_account_inspection_cpa_action(payload)
 
         self.assertTrue(result["ok"])
@@ -304,7 +305,7 @@ class AccountInspectionTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir, \
              patch.object(accounts_store, "DB_PATH", Path(tmpdir) / "accounts.db"), \
-             patch("regpilot.api._cpa_request", side_effect=fake_request):
+             patch("regpilot.account_inspection._cpa_request", side_effect=fake_request):
             accounts_store.upsert_account(account)
             result = fastapi_api.api_account_inspection_cpa_action(payload)
             saved = accounts_store.get_account("acc-1")
@@ -325,7 +326,7 @@ class AccountInspectionTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir, \
              patch.object(accounts_store, "DB_PATH", Path(tmpdir) / "accounts.db"), \
-             patch("regpilot.api._cpa_request", side_effect=fake_request):
+             patch("regpilot.account_inspection._cpa_request", side_effect=fake_request):
             result = fastapi_api.api_account_inspection_cpa_action(payload)
 
         self.assertTrue(result["ok"])
