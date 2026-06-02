@@ -47,7 +47,7 @@ class CallbackContinueParsingTests(unittest.TestCase):
         self.assertEqual(code_name, "")
 
     def test_reauthorize_job_log_line_prefers_email_over_raw_id(self):
-        with patch.object(fastapi_api, "get_account", return_value={"email": "user@example.com"}):
+        with patch("regpilot.api_reauthorization.get_account", return_value={"email": "user@example.com"}):
             line = fastapi_api._reauthorize_account_log_line("acct-1")
 
         self.assertEqual(line, "阶段：账号：user@example.com（ID：acct-1）")
