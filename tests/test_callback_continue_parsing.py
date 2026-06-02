@@ -1852,6 +1852,33 @@ class PhoneFlowRuntimeTests(unittest.TestCase):
         self.assertEqual(result["success_count"], 2)
         self.assertEqual(result["items"][0]["phones_attempted"], ["+573000000001", "+573000000002"])
 
+    def test_phone_direct_without_sms_auto_retry_reports_single_attempt_failure(self):
+        profile = register_core.EnvironmentProfile("ua1", "en-US", "America/New_York", 1366, 768, "proxy-1", True)
+
+        def fake_once(_payload, **_kwargs):
+            exc = RuntimeError("smsbower_get_number_failed: NO_NUMBERS (minPrice=0.0010, maxPrice=0.0300)")
+            exc.phones_attempted = []
+            raise exc
+
+        with patch("regpilot.api_tasks.prepare_environment_profile_from_payload", return_value=profile), \
+             patch("regpilot.api_tasks._phone_direct_once", side_effect=fake_once):
+            result = api_tasks._phone_direct(
+                {
+                    "total": 2,
+                    "threads": 1,
+                    "env_random_enabled": True,
+                    "sms_auto_retry": False,
+                    "sms_provider": "smsbower",
+                    "smsbower_api_key": "sms-key",
+                }
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["failure_count"], 2)
+        errors = [item["error"] for item in result["failures"]]
+        self.assertEqual(errors, ["smsbower_get_number_failed: NO_NUMBERS (minPrice=0.0010, maxPrice=0.0300)"] * 2)
+        self.assertTrue(all("retry_exhausted" not in error for error in errors))
+
     def test_phone_direct_serializes_cpa_oauth_state_section(self):
         source = Path(api_tasks.__file__).read_text(encoding="utf-8")
 

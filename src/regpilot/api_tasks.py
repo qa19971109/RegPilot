@@ -750,7 +750,7 @@ def _sms_retry_exhausted_message(provider: str, attempts: int, error: str) -> st
 
 def _unwrap_sms_retry_error(error: str) -> str:
     text = str(error or "").strip()
-    match = re.match(r"^(?:hero_sms|smsbower)_retry_exhausted_after_\d+_attempts:\s*(.+)$", text)
+    match = re.match(r"^(?:hero_sms|smsbower|5sim)_retry_exhausted_after_\d+_attempts:\s*(.+)$", text)
     return match.group(1).strip() if match else text
 
 
@@ -1425,7 +1425,16 @@ def _phone_direct(payload: dict[str, Any]) -> dict[str, Any]:
                             phone = str(getattr(exc, "phone_number", "") or "")
                             if phone and phone not in attempted_phones:
                                 attempted_phones.append(phone)
-                        if _is_sms_inventory_error(last_error) or not hero_sms.auto_retry or attempt_index >= attempt_limit:
+                        if not hero_sms.auto_retry:
+                            single_error = RuntimeError(last_error or str(exc) or "phone_direct_failed")
+                            try:
+                                setattr(single_error, "phones_attempted", list(attempted_phones))
+                                if attempted_phones:
+                                    setattr(single_error, "phone_number", attempted_phones[-1])
+                            except Exception:
+                                pass
+                            raise single_error
+                        if _is_sms_inventory_error(last_error) or attempt_index >= attempt_limit:
                             retry_error = RuntimeError(_sms_retry_exhausted_message(hero_sms.provider, attempt_limit, last_error))
                             try:
                                 setattr(retry_error, "phones_attempted", list(attempted_phones))
