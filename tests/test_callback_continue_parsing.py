@@ -23,6 +23,7 @@ from regpilot import mail_provider
 from regpilot import reauthorize as reauth
 from regpilot import cli
 from regpilot import microsoft_mail_pool
+from regpilot import api_accounts
 from regpilot.api_tasks import _hero_phone_bind
 
 
@@ -3511,8 +3512,8 @@ class ApiAccountSafetyTests(unittest.TestCase):
         }
 
     def test_account_list_redacts_secrets_but_keeps_status_fields(self):
-        with patch("regpilot.api.list_accounts", return_value=[self._account()]), \
-             patch("regpilot.api.count_accounts", return_value=1):
+        with patch("regpilot.api_accounts.list_accounts", return_value=[self._account()]), \
+             patch("regpilot.api_accounts.count_accounts", return_value=1):
             out = fastapi_api.api_list_accounts()
 
         item = out["items"][0]
@@ -3553,8 +3554,8 @@ class ApiAccountSafetyTests(unittest.TestCase):
         self.assertEqual(safe["mail_provider_label"], "Cloudflare")
 
     def test_account_list_accepts_search_query(self):
-        with patch("regpilot.api.list_accounts", return_value=[self._account()]) as list_mock, \
-             patch("regpilot.api.count_accounts", return_value=1) as count_mock:
+        with patch("regpilot.api_accounts.list_accounts", return_value=[self._account()]) as list_mock, \
+             patch("regpilot.api_accounts.count_accounts", return_value=1) as count_mock:
             out = fastapi_api.api_list_accounts(q=" example ")
 
         self.assertEqual(out["q"], "example")
@@ -3594,9 +3595,9 @@ class ApiAccountSafetyTests(unittest.TestCase):
 
     def test_account_detail_and_save_responses_are_redacted(self):
         account = self._account()
-        with patch("regpilot.api.get_account", return_value=account):
+        with patch("regpilot.api_accounts.get_account", return_value=account):
             detail = fastapi_api.api_get_account("acc-1")
-        with patch("regpilot.api.upsert_account", return_value=account):
+        with patch("regpilot.api_accounts.upsert_account", return_value=account):
             saved = fastapi_api.api_upsert_account(
                 fastapi_api.AccountUpsertRequest(
                     id="acc-1",
@@ -4509,8 +4510,8 @@ class StabilityTests(unittest.TestCase):
         }
 
         with self.assertRaises(fastapi_api.HTTPException) as ctx, \
-             patch("regpilot.api.requests.post", side_effect=fastapi_api.requests.RequestException("timeout")), \
-             patch("regpilot.api.upsert_account") as upsert:
+             patch("regpilot.api_accounts.requests.post", side_effect=api_accounts.requests.RequestException("timeout")), \
+             patch("regpilot.api_accounts.upsert_account") as upsert:
             fastapi_api._refresh_account_tokens(item)
 
         self.assertEqual(ctx.exception.status_code, 400)
