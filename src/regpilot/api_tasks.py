@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import json
 import re
 import threading
@@ -22,6 +22,7 @@ from .sms_provider_config import SMSBOWER_BASE_URL, build_sms_config_from_values
 
 WEBUI_CONFIG_PATH = DATA_DIR / "webui_config.json"
 WEBUI_CONFIG_LAST_VALID_PATH = DATA_DIR / "webui_config.last_valid.json"
+PHONE_DIRECT_FUTURE_WAIT_HEARTBEAT_SECONDS = 15.0
 
 
 def _zh_task_error(message: Any) -> str:
@@ -1497,33 +1498,51 @@ def _phone_direct(payload: dict[str, Any]) -> dict[str, Any]:
 
     executor_context = nullcontext() if rotate_environment else environment_profile_context(env_profile)
     with executor_context:
-        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        executor = ThreadPoolExecutor(max_workers=worker_count)
+        try:
             futures = {executor.submit(_worker, index): index for index in range(1, requested_total + 1)}
-            for future in as_completed(futures):
-                index = futures[future]
-                try:
-                    item = future.result()
-                    if item.get("ok"):
-                        successes.append(item)
-                    else:
-                        failures.append({"ok": False, "worker": index, "error": str(item.get("error") or "phone_direct_failed"), **item})
-                except Exception as exc:
-                    error_item = {"ok": False, "worker": index, "error": str(exc)}
-                    phones_attempted = getattr(exc, "phones_attempted", None)
-                    if phones_attempted:
-                        error_item["phones_attempted"] = list(phones_attempted)
-                        error_item["phone_number"] = str(error_item["phones_attempted"][-1] or "")
-                    phone_prices_attempted = getattr(exc, "phone_prices_attempted", None)
-                    if phone_prices_attempted:
-                        error_item["phone_prices_attempted"] = [str(price or "") for price in phone_prices_attempted]
-                    phone_price = str(getattr(exc, "activation_price", "") or getattr(exc, "phone_price", "") or "")
-                    if not phone_price and error_item.get("phone_prices_attempted"):
-                        phone_price = str(error_item["phone_prices_attempted"][-1] or "")
-                    if phone_price:
-                        error_item["activation_price"] = phone_price
-                        error_item["phone_price"] = phone_price
-                    failures.append(error_item)
-                    print(f"阶段：手机直注并发单元 {index}/{requested_total} 失败：{exc}")
+            pending = set(futures)
+            last_wait_heartbeat = time.monotonic()
+            while pending:
+                done, pending = wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
+                if not done:
+                    now = time.monotonic()
+                    if now - last_wait_heartbeat >= PHONE_DIRECT_FUTURE_WAIT_HEARTBEAT_SECONDS:
+                        print(f"阶段：手机直注批量等待并发单元完成，剩余 {len(pending)} 个")
+                        last_wait_heartbeat = now
+                    continue
+                for future in done:
+                    index = futures[future]
+                    try:
+                        item = future.result()
+                        if item.get("ok"):
+                            successes.append(item)
+                        else:
+                            failures.append({"ok": False, "worker": index, "error": str(item.get("error") or "phone_direct_failed"), **item})
+                    except JobCancelledError:
+                        raise
+                    except Exception as exc:
+                        error_item = {"ok": False, "worker": index, "error": str(exc)}
+                        phones_attempted = getattr(exc, "phones_attempted", None)
+                        if phones_attempted:
+                            error_item["phones_attempted"] = list(phones_attempted)
+                            error_item["phone_number"] = str(error_item["phones_attempted"][-1] or "")
+                        phone_prices_attempted = getattr(exc, "phone_prices_attempted", None)
+                        if phone_prices_attempted:
+                            error_item["phone_prices_attempted"] = [str(price or "") for price in phone_prices_attempted]
+                        phone_price = str(getattr(exc, "activation_price", "") or getattr(exc, "phone_price", "") or "")
+                        if not phone_price and error_item.get("phone_prices_attempted"):
+                            phone_price = str(error_item["phone_prices_attempted"][-1] or "")
+                        if phone_price:
+                            error_item["activation_price"] = phone_price
+                            error_item["phone_price"] = phone_price
+                        failures.append(error_item)
+                        print(f"阶段：手机直注并发单元 {index}/{requested_total} 失败：{exc}")
+        except BaseException:
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise
+        else:
+            executor.shutdown(wait=True)
 
     ok = len(successes) >= requested_total
     result: dict[str, Any] = {

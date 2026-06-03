@@ -1914,6 +1914,33 @@ class PhoneFlowRuntimeTests(unittest.TestCase):
         self.assertEqual(result["failures"][0]["activation_price"], "0.0230")
         self.assertEqual(result["failures"][0]["phone_prices_attempted"], ["0.0230"])
 
+    def test_phone_direct_stop_does_not_wait_for_stuck_worker_future(self):
+        profile = register_core.EnvironmentProfile("ua1", "en-US", "America/New_York", 1366, 768, "proxy-1", True)
+        release_worker = threading.Event()
+
+        def fake_once(_payload, **_kwargs):
+            release_worker.wait(5)
+            return {"ok": True, "phone_number": "+573000000001", "password": "pw"}
+
+        started_at = time.monotonic()
+        try:
+            with patch("regpilot.api_tasks.prepare_environment_profile_from_payload", return_value=profile), \
+                 patch("regpilot.api_tasks._phone_direct_once", side_effect=fake_once), \
+                 patch("regpilot.api_tasks.wait", side_effect=api_tasks.JobCancelledError("job_stopped_by_user")):
+                with self.assertRaises(api_tasks.JobCancelledError):
+                    api_tasks._phone_direct(
+                        {
+                            "total": 2,
+                            "threads": 1,
+                            "sms_provider": "smsbower",
+                            "smsbower_api_key": "sms-key",
+                        }
+                    )
+        finally:
+            release_worker.set()
+
+        self.assertLess(time.monotonic() - started_at, 1.0)
+
     def test_phone_direct_serializes_cpa_oauth_state_section(self):
         source = Path(api_tasks.__file__).read_text(encoding="utf-8")
 
