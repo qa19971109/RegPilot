@@ -1880,6 +1880,40 @@ class PhoneFlowRuntimeTests(unittest.TestCase):
         self.assertEqual(errors, ["smsbower_get_number_failed: NO_NUMBERS (minPrice=0.0010, maxPrice=0.0300)"] * 2)
         self.assertTrue(all("retry_exhausted" not in error for error in errors))
 
+    def test_phone_direct_result_preserves_phone_price_for_success_and_failure(self):
+        profile = register_core.EnvironmentProfile("ua1", "en-US", "America/New_York", 1366, 768, "proxy-1", True)
+        calls = []
+
+        def fake_once(_payload, **_kwargs):
+            calls.append(1)
+            if len(calls) == 1:
+                return {"ok": True, "phone_number": "+573000000001", "password": "pw", "activation_price": "0.0210"}
+            exc = RuntimeError("sms_code_timeout")
+            exc.phones_attempted = ["+573000000002"]
+            exc.phone_number = "+573000000002"
+            exc.activation_price = "0.0230"
+            exc.phone_prices_attempted = ["0.0230"]
+            raise exc
+
+        with patch("regpilot.api_tasks.prepare_environment_profile_from_payload", return_value=profile), \
+             patch("regpilot.api_tasks._phone_direct_once", side_effect=fake_once):
+            result = api_tasks._phone_direct(
+                {
+                    "total": 2,
+                    "threads": 1,
+                    "sms_provider": "smsbower",
+                    "smsbower_api_key": "sms-key",
+                }
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["success_count"], 1)
+        self.assertEqual(result["failure_count"], 1)
+        self.assertEqual(result["items"][0]["activation_price"], "0.0210")
+        self.assertEqual(result["failures"][0]["phone_number"], "+573000000002")
+        self.assertEqual(result["failures"][0]["activation_price"], "0.0230")
+        self.assertEqual(result["failures"][0]["phone_prices_attempted"], ["0.0230"])
+
     def test_phone_direct_serializes_cpa_oauth_state_section(self):
         source = Path(api_tasks.__file__).read_text(encoding="utf-8")
 
@@ -4133,6 +4167,10 @@ class StabilityTests(unittest.TestCase):
         self.assertIn("function renderStatusResultRows", html)
         self.assertIn("rows.slice(0,10)", html)
         self.assertIn("显示其余", html)
+        self.assertIn("function resultPhonePrice", html)
+        self.assertIn("价格 ${price}", html)
+        self.assertIn("status-summary-sticky", html)
+        self.assertIn("function renderStatusSummary", html)
         self.assertIn("${active&&steps.length?", html)
         self.assertIn("任务结束：成功 ${counts.success}", html)
         self.assertNotIn("失败 ${counts.failure}；${message}", html)

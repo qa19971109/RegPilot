@@ -1022,14 +1022,17 @@ def _phone_direct_once(
     with env_context:
         last_error = ""
         attempted_phones: list[str] = []
+        attempted_phone_prices: list[str] = []
         attempt_limit = _sms_retry_count_from_payload(payload, hero_sms.auto_retry)
         for attempt_index in range(1, attempt_limit + 1):
             activation = acquire_hero_sms_phone(hero_sms)
             phone_number = str(activation.get("phone_number") or "").strip()
+            raw_phone_price = activation.get("price")
+            phone_price = "" if raw_phone_price is None else str(raw_phone_price).strip()
             if phone_number:
                 attempted_phones.append(phone_number)
+                attempted_phone_prices.append(phone_price)
             activation_id = str(activation.get("activation_id") or "").strip()
-            phone_price = str(activation.get("price") or "").strip()
             phone_verified = False
             activation_released = False
             password = str(payload.get("default_password") or "").strip() or _random_password()
@@ -1311,7 +1314,10 @@ def _phone_direct_once(
                     "import_submit_message": str(codex2api_result.get("message") or "") if codex2api_result else "",
                     "codex2api_import_submit_ok": bool(codex2api_result.get("ok")) if codex2api_result else False,
                     "codex2api_import_submit_message": str(codex2api_result.get("message") or "") if codex2api_result else "",
+                    "activation_price": phone_price,
+                    "phone_price": phone_price,
                     "phones_attempted": list(attempted_phones),
+                    "phone_prices_attempted": list(attempted_phone_prices),
                 }
             except Exception as exc:
                 last_error = str(exc)
@@ -1324,7 +1330,10 @@ def _phone_direct_once(
                     print(f"阶段：当前号码流程失败，未开启自动重试，错误={last_error}")
                     try:
                         setattr(exc, "phones_attempted", list(attempted_phones))
+                        setattr(exc, "phone_prices_attempted", list(attempted_phone_prices))
                         setattr(exc, "phone_number", phone_number)
+                        setattr(exc, "activation_price", phone_price)
+                        setattr(exc, "phone_price", phone_price)
                     except Exception:
                         pass
                     raise
@@ -1333,7 +1342,10 @@ def _phone_direct_once(
                     retry_error = RuntimeError(_sms_retry_exhausted_message(hero_sms.provider, attempt_limit, last_error))
                     try:
                         setattr(retry_error, "phones_attempted", list(attempted_phones))
+                        setattr(retry_error, "phone_prices_attempted", list(attempted_phone_prices))
                         setattr(retry_error, "phone_number", phone_number)
+                        setattr(retry_error, "activation_price", phone_price)
+                        setattr(retry_error, "phone_price", phone_price)
                     except Exception:
                         pass
                     raise retry_error
@@ -1386,6 +1398,7 @@ def _phone_direct(payload: dict[str, Any]) -> dict[str, Any]:
                 hero_sms = _sms_config_from_payload(worker_payload)
                 attempt_limit = _sms_retry_count_from_payload(worker_payload, hero_sms.auto_retry)
                 attempted_phones: list[str] = []
+                attempted_phone_prices: list[str] = []
                 last_error = ""
                 for attempt_index in range(1, attempt_limit + 1):
                     attempt_payload = dict(worker_payload)
@@ -1410,8 +1423,13 @@ def _phone_direct(payload: dict[str, Any]) -> dict[str, Any]:
                         for phone in item.get("phones_attempted") or []:
                             if phone and phone not in attempted_phones:
                                 attempted_phones.append(str(phone))
+                        item_prices = [str(price or "") for price in (item.get("phone_prices_attempted") or [])]
+                        if item_prices:
+                            attempted_phone_prices.extend(item_prices)
                         if attempted_phones:
                             item["phones_attempted"] = list(attempted_phones)
+                        if attempted_phone_prices:
+                            item["phone_prices_attempted"] = list(attempted_phone_prices)
                         print(f"阶段：手机直注并发单元 {index}/{requested_total} 已完成")
                         return item
                     except Exception as exc:
@@ -1425,12 +1443,21 @@ def _phone_direct(payload: dict[str, Any]) -> dict[str, Any]:
                             phone = str(getattr(exc, "phone_number", "") or "")
                             if phone and phone not in attempted_phones:
                                 attempted_phones.append(phone)
+                        exc_prices = [str(price or "") for price in (getattr(exc, "phone_prices_attempted", None) or [])]
+                        if exc_prices:
+                            attempted_phone_prices.extend(exc_prices)
                         if not hero_sms.auto_retry:
                             single_error = RuntimeError(last_error or str(exc) or "phone_direct_failed")
                             try:
                                 setattr(single_error, "phones_attempted", list(attempted_phones))
+                                setattr(single_error, "phone_prices_attempted", list(attempted_phone_prices))
                                 if attempted_phones:
                                     setattr(single_error, "phone_number", attempted_phones[-1])
+                                price = str(getattr(exc, "activation_price", "") or getattr(exc, "phone_price", "") or "")
+                                if not price and attempted_phone_prices:
+                                    price = attempted_phone_prices[-1]
+                                setattr(single_error, "activation_price", price)
+                                setattr(single_error, "phone_price", price)
                             except Exception:
                                 pass
                             raise single_error
@@ -1438,8 +1465,14 @@ def _phone_direct(payload: dict[str, Any]) -> dict[str, Any]:
                             retry_error = RuntimeError(_sms_retry_exhausted_message(hero_sms.provider, attempt_limit, last_error))
                             try:
                                 setattr(retry_error, "phones_attempted", list(attempted_phones))
+                                setattr(retry_error, "phone_prices_attempted", list(attempted_phone_prices))
                                 if attempted_phones:
                                     setattr(retry_error, "phone_number", attempted_phones[-1])
+                                price = str(getattr(exc, "activation_price", "") or getattr(exc, "phone_price", "") or "")
+                                if not price and attempted_phone_prices:
+                                    price = attempted_phone_prices[-1]
+                                setattr(retry_error, "activation_price", price)
+                                setattr(retry_error, "phone_price", price)
                             except Exception:
                                 pass
                             raise retry_error
@@ -1480,6 +1513,15 @@ def _phone_direct(payload: dict[str, Any]) -> dict[str, Any]:
                     if phones_attempted:
                         error_item["phones_attempted"] = list(phones_attempted)
                         error_item["phone_number"] = str(error_item["phones_attempted"][-1] or "")
+                    phone_prices_attempted = getattr(exc, "phone_prices_attempted", None)
+                    if phone_prices_attempted:
+                        error_item["phone_prices_attempted"] = [str(price or "") for price in phone_prices_attempted]
+                    phone_price = str(getattr(exc, "activation_price", "") or getattr(exc, "phone_price", "") or "")
+                    if not phone_price and error_item.get("phone_prices_attempted"):
+                        phone_price = str(error_item["phone_prices_attempted"][-1] or "")
+                    if phone_price:
+                        error_item["activation_price"] = phone_price
+                        error_item["phone_price"] = phone_price
                     failures.append(error_item)
                     print(f"阶段：手机直注并发单元 {index}/{requested_total} 失败：{exc}")
 
