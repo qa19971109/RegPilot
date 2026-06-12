@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import os
 import tempfile
 import threading
 import time
@@ -17,6 +18,31 @@ from regpilot import register_core
 from regpilot import oauth_token_flow as flow
 from regpilot import api as fastapi_api
 from regpilot import api_tasks
+from regpilot import job_log_maintenance
+from regpilot import phone_direct_diagnostics
+from regpilot import registration_artifacts
+from regpilot import registration_about_you
+from regpilot import registration_callback
+from regpilot import registration_consent
+from regpilot import registration_environment
+from regpilot import registration_identity
+from regpilot import registration_cpa_oauth_helpers
+from regpilot import registration_responses
+from regpilot import registration_sentinel
+from regpilot import registration_session
+from regpilot import registration_oauth_helpers
+from regpilot import registration_state
+from regpilot import sms_activation_catalog
+from regpilot import sms_activation_client
+from regpilot import sms_activation_flow
+from regpilot import sms_activation_helpers
+from regpilot import task_error_messages
+from regpilot import task_payload_config
+from regpilot import task_register_runner
+from regpilot import task_sms_config
+from regpilot import task_sms_lookup
+from regpilot import webui_config_store
+from regpilot import phone_direct_flow
 from regpilot import accounts_store
 from regpilot import job_runner
 from regpilot import mail_provider
@@ -24,6 +50,9 @@ from regpilot import reauthorize as reauth
 from regpilot import cli
 from regpilot import microsoft_mail_pool
 from regpilot import api_accounts
+from regpilot import api_presenters
+from regpilot import oauth_add_email_flow
+from regpilot import oauth_continue_navigation
 from regpilot.api_tasks import _hero_phone_bind
 
 
@@ -172,6 +201,101 @@ class CallbackContinueParsingTests(unittest.TestCase):
         self.assertEqual(flow._bind_email_wait_config({"wait_timeout": 60})["wait_timeout"], 180)
         self.assertEqual(flow._bind_email_wait_config({"wait_timeout": 60, "bind_email_wait_timeout": 240})["wait_timeout"], 240)
         self.assertEqual(flow._bind_email_wait_config({"wait_timeout": 300})["wait_timeout"], 300)
+
+    def test_oauth_add_email_flow_wait_config_and_completion_helpers(self):
+        self.assertEqual(oauth_add_email_flow.bind_email_wait_config({"wait_timeout": 60})["wait_timeout"], 180)
+        self.assertEqual(oauth_add_email_flow.bind_email_wait_config({"wait_timeout": 60, "add_email_wait_timeout": 240})["wait_timeout"], 240)
+        self.assertTrue(
+            oauth_add_email_flow.add_email_url_indicates_completion(
+                "http://localhost:1455/auth/callback?code=cb&state=abc",
+                callback_params_from_url_fn=registration_callback.extract_oauth_callback_params_from_url,
+            )
+        )
+        self.assertFalse(
+            oauth_add_email_flow.add_email_url_indicates_completion(
+                "https://auth.openai.com/email-verification",
+                callback_params_from_url_fn=registration_callback.extract_oauth_callback_params_from_url,
+            )
+        )
+
+    def test_oauth_add_email_flow_submit_api_uses_injected_headers_and_request(self):
+        calls = []
+
+        class FakeResponse:
+            status_code = 200
+            text = '{"continue_url":"https://auth.openai.com/email-verification"}'
+            headers = {}
+            url = f"{register_core.auth_base}/api/accounts/add-email/send"
+
+        def fake_request(_session, method, url, **kwargs):
+            calls.append((method, url, kwargs))
+            return FakeResponse(), ""
+
+        registrar = SimpleNamespace(session=object(), device_id="dev-1")
+        info = oauth_add_email_flow.submit_add_email_api(
+            registrar,
+            "bind@example.com",
+            f"{register_core.auth_base}/add-email",
+            auth_base_value=register_core.auth_base,
+            add_email_headers_fn=lambda _registrar, _referer, **_kwargs: {"x-test": "1"},
+            request_with_retry_fn=fake_request,
+            response_json_fn=lambda _response: {"continue_url": "https://auth.openai.com/email-verification"},
+            callback_params_from_url_fn=registration_callback.extract_oauth_callback_params_from_url,
+        )
+
+        self.assertTrue(info["ok"])
+        self.assertEqual(info["attempt"], "/api/accounts/add-email/send")
+        self.assertEqual(calls[0][0], "post")
+        self.assertEqual(calls[0][2]["headers"], {"x-test": "1"})
+        self.assertEqual(calls[0][2]["json"], {"origin_page_type": "add_email", "data": {"email": "bind@example.com"}})
+
+    def test_oauth_add_email_flow_continue_happy_path_uses_injected_steps(self):
+        callback_url = "http://localhost:1455/auth/callback?code=cb&state=abc"
+        registrar = SimpleNamespace(session=object(), device_id="dev-1")
+        calls = []
+
+        class FakeResponse:
+            def __init__(self, url, text="", body=None):
+                self.url = url
+                self.text = text
+                self.status_code = 200
+                self.headers = {}
+                self._body = body or {}
+
+        def fake_request(_session, method, url, **kwargs):
+            calls.append((method, url, kwargs))
+            return FakeResponse(url, '<form action="/add-email"><input name="email"></form>', {"page": {"type": "add_email"}}), ""
+
+        final_url, resolved_email = oauth_add_email_flow.continue_with_optional_add_email(
+            registrar,
+            continue_url=f"{register_core.auth_base}/add-email",
+            bind_email="bind@example.com",
+            bind_email_code="123456",
+            bind_mail_config={"providers": [{"type": "icloud"}]},
+            request_with_retry_fn=fake_request,
+            navigate_headers_fn=lambda: {"x-nav": "1"},
+            response_json_fn=lambda response: getattr(response, "_body", {}),
+            is_add_email_page_url_fn=flow._is_add_email_page_url,
+            prepare_bind_mailbox_fn=lambda _config, email: (email, {"provider": "icloud", "email": email}),
+            callback_params_from_url_fn=registration_callback.extract_oauth_callback_params_from_url,
+            extract_form_inputs_fn=lambda _html: ("/add-email", {}, "email", ""),
+            post_form_and_follow_fn=lambda *_args, **_kwargs: ("https://auth.openai.com/email-verification", '<input name="otp_code">'),
+            submit_add_email_api_fn=lambda *_args, **_kwargs: {"ok": True, "status": 200, "attempt": "/api/accounts/add-email/send", "final_url": "https://auth.openai.com/email-verification"},
+            send_attempt_summary_fn=flow._add_email_send_attempt_summary,
+            continue_url_from_step_fn=flow._continue_url_from_step,
+            refresh_code_page_fn=lambda *_args, **_kwargs: ("https://auth.openai.com/email-verification", '<input name="otp_code">'),
+            wait_for_code_fn=lambda *_args, **_kwargs: self.fail("explicit code should skip wait"),
+            bind_email_wait_config_fn=flow._bind_email_wait_config,
+            has_code_form_fn=lambda html: "otp_code" in html,
+            submit_code_form_fn=lambda *_args, **_kwargs: (callback_url, ""),
+            url_indicates_completion_fn=flow._add_email_url_indicates_completion,
+            validate_code_api_fn=lambda *_args, **_kwargs: self.fail("form callback should skip API validate"),
+            now_ms_fn=lambda: 123000,
+        )
+
+        self.assertEqual(final_url, callback_url)
+        self.assertEqual(resolved_email, "bind@example.com")
+        self.assertEqual(calls[0][2]["headers"], {"x-nav": "1"})
 
     def test_add_email_code_submit_prefers_code_form_when_email_form_is_also_present(self):
         callback_url = "http://localhost:1455/auth/callback?code=cb123&state=oauth-state"
@@ -536,6 +660,52 @@ class CallbackContinueParsingTests(unittest.TestCase):
             f"{register_core.auth_base}/sign-in-with-chatgpt/codex/consent?state=abc",
         )
         self.assertEqual(result["callback_url"], "http://localhost:1455/auth/callback?code=cb123&state=abc")
+        self.assertEqual(result["page_type"], "about_you")
+
+    def test_oauth_continue_navigation_prefers_callback_and_filters_static_assets(self):
+        candidates = oauth_continue_navigation.iter_flow_url_candidates(
+            [
+                "https://cdn.oaistatic.com/assets/app.js",
+                "/authorize/resume?state=abc",
+                "http://localhost:1455/auth/callback?code=cb123&state=abc",
+            ],
+            auth_base_value=register_core.auth_base,
+        )
+
+        preferred = oauth_continue_navigation.choose_preferred_flow_url(
+            candidates,
+            auth_base_value=register_core.auth_base,
+            callback_params_from_url_fn=registration_callback.extract_oauth_callback_params_from_url,
+        )
+
+        self.assertNotIn("https://cdn.oaistatic.com/assets/app.js", candidates)
+        self.assertEqual(preferred, "http://localhost:1455/auth/callback?code=cb123&state=abc")
+
+    def test_oauth_continue_navigation_load_page_uses_injected_request_and_json(self):
+        response = self._response(
+            url=f"{register_core.auth_base}/about-you?state=abc",
+            text='next="/authorize/resume?state=abc"',
+        )
+        calls = []
+
+        def fake_request(_session, method, url, **kwargs):
+            calls.append((method, url, kwargs))
+            return response, ""
+
+        registrar = SimpleNamespace(session=object())
+        result = oauth_continue_navigation.load_continue_page(
+            registrar,
+            f"{register_core.auth_base}/about-you?state=abc",
+            auth_base_value=register_core.auth_base,
+            request_with_retry_fn=fake_request,
+            navigate_headers_fn=lambda: {"x-test": "1"},
+            response_json_fn=lambda _response: {"page": {"type": "about_you"}},
+            callback_params_from_url_fn=registration_callback.extract_oauth_callback_params_from_url,
+        )
+
+        self.assertEqual(calls[0][0], "get")
+        self.assertEqual(calls[0][2]["headers"], {"x-test": "1"})
+        self.assertEqual(result["continue_url"], f"{register_core.auth_base}/authorize/resume?state=abc")
         self.assertEqual(result["page_type"], "about_you")
 
     def test_resolve_oauth_callback_follows_embedded_continue_then_uses_consent_fallback(self):
@@ -1197,6 +1367,64 @@ class RegisterCoreCallbackFallbackTests(unittest.TestCase):
         self.assertEqual(mailbox["bind_email"], "bind@example.com")
         self.assertEqual(len(start_urls), 2)
         self.assertEqual(mock_add_email.call_count, 2)
+
+    def test_registered_phone_signup_after_password_reopens_oauth_before_add_email(self):
+        start_urls = []
+
+        class DummyRegistrar:
+            def __init__(self):
+                self.session = object()
+                self.last_authorize = {}
+
+            def start_authorize(self, email, authorize_url="", screen_hint=""):
+                start_urls.append(authorize_url)
+                final_url = (
+                    "https://auth.openai.com/log-in/password"
+                    if len(start_urls) == 1
+                    else "https://auth.openai.com/add-email?state=cpa-state"
+                )
+                self.last_authorize = {"state": "cpa-state", "final_url": final_url}
+                return {
+                    "status": 200,
+                    "final_url": final_url,
+                    "state": "cpa-state",
+                }
+
+            def establish_signup_session(self):
+                return {"ok": True, "flow_kind": "login"}
+
+            def exchange_platform_tokens(self, _code_verifier, _callback_url):
+                raise AssertionError("CPA callback path should not use local token exchange")
+
+        cfg = register_core.RegisterConfig(
+            codex2api_url="http://127.0.0.1:8317",
+            codex2api_admin_key="key",
+            codex2api_auto_import=True,
+        )
+        cfg.mail.providers = [{"type": "icloud", "imap_user": "owner@icloud.com", "imap_password": "app-pass"}]
+        mailbox = {}
+        callback_url = "http://localhost:1455/auth/callback?code=cb&state=cpa-state"
+        with patch("regpilot.reauthorize._start_cpa_oauth", return_value={"authorize_url": "https://auth.openai.com/oauth/authorize?state=cpa-state", "state": "cpa-state"}), \
+             patch("regpilot.reauthorize._attempt_password_login", return_value={"ok": True, "status": 200, "final_url": f"{register_core.auth_base}/api/accounts/password/verify", "json": {}}), \
+             patch("regpilot.reauthorize._step_requires_phone_verification", return_value=False), \
+             patch("regpilot.oauth_token_flow._continue_with_optional_add_email", return_value=(callback_url, "bind@example.com")) as mock_add_email, \
+             patch("regpilot.oauth_token_flow._resolve_oauth_callback", return_value=""), \
+             patch("regpilot.reauthorize._resolve_callback_step", return_value=""), \
+             patch("regpilot.reauthorize._submit_callback_to_cpa", return_value={"ok": True, "message": "ok"}):
+            result = register_core._exchange_registered_account_tokens(
+                config=cfg,
+                registrar=DummyRegistrar(),
+                email="+56994920922",
+                password="pw",
+                mailbox=mailbox,
+                code_verifier="",
+                callback_url="https://chatgpt.com/api/auth/callback/openai?code=chatgpt-code&state=chatgpt-state",
+            )
+
+        self.assertTrue(result.ok)
+        self.assertEqual(result.callback_url, callback_url)
+        self.assertEqual(len(start_urls), 2)
+        self.assertEqual(mock_add_email.call_args.kwargs["continue_url"], "https://auth.openai.com/add-email?state=cpa-state")
 
     def test_prepare_bind_mailbox_uses_mail_provider_for_explicit_icloud_alias(self):
         mail_config = {
@@ -1914,6 +2142,18 @@ class PhoneFlowRuntimeTests(unittest.TestCase):
         self.assertEqual(result["failures"][0]["activation_price"], "0.0230")
         self.assertEqual(result["failures"][0]["phone_prices_attempted"], ["0.0230"])
 
+    def test_phone_direct_error_item_uses_last_attempted_price(self):
+        exc = RuntimeError("sms_code_timeout")
+        exc.phones_attempted = ["+573000000002"]
+        exc.phone_prices_attempted = ["0.0230"]
+
+        item = phone_direct_flow.phone_direct_error_item(2, exc)
+
+        self.assertEqual(item["worker"], 2)
+        self.assertEqual(item["phone_number"], "+573000000002")
+        self.assertEqual(item["activation_price"], "0.0230")
+        self.assertEqual(item["phone_price"], "0.0230")
+
     def test_phone_direct_stop_does_not_wait_for_stuck_worker_future(self):
         profile = register_core.EnvironmentProfile("ua1", "en-US", "America/New_York", 1366, 768, "proxy-1", True)
         release_worker = threading.Event()
@@ -2100,6 +2340,18 @@ class PhoneFlowRuntimeTests(unittest.TestCase):
 
         self.assertIn("重发后已等待 0/60", message)
         self.assertIn("总计 36 秒", message)
+
+    def test_phone_direct_diagnostics_formats_sms_wait_progress_message(self):
+        before_resend = phone_direct_diagnostics.sms_wait_progress_message(
+            {"elapsed": 18, "remaining": 161, "resent": False, "resend_after_seconds": 30}
+        )
+        after_resend = phone_direct_diagnostics.sms_wait_progress_message(
+            {"elapsed": 36, "remaining": 59, "resent": True, "after_resend_elapsed": 0, "timeout_after_resend": 60}
+        )
+
+        self.assertIn("18/30", before_resend)
+        self.assertIn("0/60", after_resend)
+        self.assertIn("36", after_resend)
 
     def test_submit_callback_to_cpa_with_retry_retries_before_success(self):
         calls = []
@@ -2432,6 +2684,122 @@ class HeroPhoneBindAboutYouFallbackTests(unittest.TestCase):
         self.assertEqual(captured["providers"][0]["base_url"], "https://mail.example.test/v1")
         self.assertEqual(captured["wait_timeout"], 17)
         self.assertEqual(captured["proxy"], "http://proxy.example.test:8080")
+
+    def test_phone_direct_login_password_page_uses_phone_password_exchange(self):
+        calls = []
+
+        class DummyTokenResult:
+            ok = True
+            error = ""
+            email = ""
+            password = ""
+            mailbox = {"bind_email": "bind@example.com", "_cpa_submit_ok": True, "_cpa_submit_message": "CPA callback submitted"}
+            callback_url = "http://localhost:1455/auth/callback?code=cb&state=abc"
+
+        class DummyRegistrar:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def start_phone_signup(self, _phone_number=""):
+                return {"status": 200, "code_verifier": "verifier", "final_url": "https://auth.openai.com/log-in/password"}
+
+            def register_user(self, _phone, _password):
+                raise AssertionError("login password page should not call register_user")
+
+            def close(self):
+                pass
+
+        def fake_exchange(**kwargs):
+            calls.append((kwargs["email"], kwargs["password"], kwargs["callback_url"]))
+            return DummyTokenResult()
+
+        payload = {
+            "hero_sms_api_key": "k",
+            "codex2api_url": "http://192.168.1.4:8317",
+            "codex2api_admin_key": "key",
+            "codex2api_auto_import": True,
+            "default_password": "FixedPass123!",
+        }
+
+        with patch("regpilot.api_tasks.acquire_hero_sms_phone", return_value={"phone_number": "+15551234567", "activation_id": "act-1", "price": "0.039"}), \
+             patch("regpilot.api_tasks.PlatformRegistrar", DummyRegistrar), \
+             patch("regpilot.api_tasks._probe_phone_signup_password_page", return_value={"status": 200, "ok": True, "matched": True, "final_url": "https://auth.openai.com/log-in/password", "title": "Enter your password - OpenAI", "text": ""}), \
+             patch("regpilot.api_tasks._exchange_registered_account_tokens", side_effect=fake_exchange), \
+             patch("regpilot.api_tasks.save_result"), \
+             patch("regpilot.api_tasks._save_partial_hero_phone_bind_result"), \
+             patch("regpilot.accounts_store.save_registration_result_to_account"):
+            result = api_tasks._phone_direct_once(payload)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(calls, [("+15551234567", "FixedPass123!", "")])
+        self.assertEqual(result["phone_price"], "0.039")
+
+    def test_phone_direct_registration_disallowed_after_sms_tries_phone_login(self):
+        calls = []
+
+        class DummyTokenResult:
+            ok = True
+            error = ""
+            email = ""
+            password = ""
+            mailbox = {"bind_email": "bind@example.com", "_cpa_submit_ok": True, "_cpa_submit_message": "CPA callback submitted"}
+            callback_url = "http://localhost:1455/auth/callback?code=cb&state=abc"
+
+        class DummyRegistrar:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def start_phone_signup(self, _phone_number=""):
+                return {"status": 200, "code_verifier": "verifier", "final_url": "https://auth.openai.com/create-account/password"}
+
+            def register_user(self, _phone, _password):
+                return {"status": 200, "ok": True}
+
+            def send_phone_otp(self):
+                return {"status": 200, "ok": True}
+
+            def validate_phone_signup_otp(self, _code):
+                return {"status": 200, "ok": True, "json": {"continue_url": "https://auth.openai.com/about-you?state=abc"}, "final_url": "https://auth.openai.com/about-you?state=abc"}
+
+            def create_account(self, _name, _birthdate, referer="", page_context=""):
+                return {
+                    "status": 400,
+                    "ok": False,
+                    "json": {"error": {"code": "registration_disallowed"}},
+                    "payload_attempts": [{"keys": ["birthdate"], "status": 400, "error_code": "registration_disallowed"}],
+                    "final_url": "https://auth.openai.com/api/accounts/create_account",
+                }
+
+            def close(self):
+                pass
+
+        def fake_exchange(**kwargs):
+            calls.append((kwargs["email"], kwargs["password"], kwargs["callback_url"]))
+            return DummyTokenResult()
+
+        payload = {
+            "hero_sms_api_key": "k",
+            "codex2api_url": "http://192.168.1.4:8317",
+            "codex2api_admin_key": "key",
+            "codex2api_auto_import": True,
+            "default_password": "FixedPass123!",
+        }
+
+        with patch("regpilot.api_tasks.acquire_hero_sms_phone", return_value={"phone_number": "+15551234567", "activation_id": "act-1", "price": "0.039"}), \
+             patch("regpilot.api_tasks.poll_hero_sms_code", return_value="123456"), \
+             patch("regpilot.api_tasks.PlatformRegistrar", DummyRegistrar), \
+             patch("regpilot.api_tasks._probe_phone_signup_password_page", return_value={"status": 200, "ok": True, "matched": True, "final_url": "https://auth.openai.com/u/signup/password?state=abc", "title": "Create your password", "text": ""}), \
+             patch("regpilot.api_tasks._load_continue_page", return_value={"continue_url": "https://auth.openai.com/about-you?state=abc", "page_type": "about_you", "text": '<input autocomplete="name"><input name="birthday">'}), \
+             patch("regpilot.api_tasks._exchange_registered_account_tokens", side_effect=fake_exchange), \
+             patch("regpilot.api_tasks.save_result"), \
+             patch("regpilot.api_tasks._save_partial_hero_phone_bind_result"), \
+             patch("regpilot.api_tasks.set_hero_sms_status"), \
+             patch("regpilot.accounts_store.save_registration_result_to_account"):
+            result = api_tasks._phone_direct_once(payload)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(calls, [("+15551234567", "FixedPass123!", "")])
+        self.assertEqual(result["phone_price"], "0.039")
 
     def test_phone_bind_ignores_sub2api_and_saves_account_after_cpa_success(self):
         class DummyTokenResult:
@@ -2781,6 +3149,37 @@ class HeroPhoneBindAboutYouFallbackTests(unittest.TestCase):
         self.assertEqual(
             fastapi_api._hero_phone_bind.__globals__["_sms_retry_exhausted_message"]("smsbower", 3, "phone_signup_password_page_not_reached"),
             "smsbower_retry_exhausted_after_3_attempts: phone_signup_password_page_not_reached",
+        )
+
+    def test_phone_direct_diagnostics_classifies_entry_errors(self):
+        self.assertEqual(
+            phone_direct_diagnostics.phone_signup_entry_error("https://auth.openai.com/error?errorCode=authorize_hydra_invalid_request"),
+            "authorize_hydra_invalid_request",
+        )
+        self.assertEqual(
+            phone_direct_diagnostics.phone_signup_entry_error("https://auth.openai.com/error?", "AuthApiFailure"),
+            "auth_api_failure",
+        )
+
+    def test_phone_direct_diagnostics_unwraps_retry_and_inventory_errors(self):
+        self.assertEqual(
+            phone_direct_diagnostics.unwrap_sms_retry_error("smsbower_retry_exhausted_after_3_attempts: NO_NUMBERS"),
+            "NO_NUMBERS",
+        )
+        self.assertTrue(phone_direct_diagnostics.is_sms_inventory_error("NO_BALANCE"))
+        self.assertEqual(phone_direct_diagnostics.sms_retry_count_from_payload({"sms_retry_count": "4"}, True), 4)
+        self.assertEqual(phone_direct_diagnostics.sms_retry_count_from_payload({"sms_retry_count": "4"}, False), 1)
+
+    def test_phone_direct_diagnostics_detects_login_password_page(self):
+        self.assertTrue(
+            phone_direct_diagnostics.phone_signup_probe_is_login_password(
+                {"final_url": "https://auth.openai.com/log-in/password", "title": "", "text": ""}
+            )
+        )
+        self.assertTrue(
+            phone_direct_diagnostics.phone_signup_probe_is_login_password(
+                {"final_url": "", "title": "Enter your password", "text": ""}
+            )
         )
 
     def test_register_failure_summary_redacts_sensitive_values(self):
@@ -3224,6 +3623,211 @@ class EmailRegistrationFlowTests(unittest.TestCase):
 
 
 class SMSProviderTests(unittest.TestCase):
+    def test_sms_activation_helpers_parse_provider_price_phone_and_codes(self):
+        self.assertEqual(sms_activation_helpers.normalize_sms_provider("five-sim"), "5sim")
+        self.assertEqual(sms_activation_helpers.normalize_sms_provider("sms bower"), "smsbower")
+        self.assertEqual(sms_activation_helpers.normalize_sms_provider(""), "hero_sms")
+        self.assertEqual(sms_activation_helpers.normalize_hero_sms_price("$0.02340"), 0.0234)
+        self.assertIsNone(sms_activation_helpers.normalize_hero_sms_price(0))
+        self.assertEqual(sms_activation_helpers.normalize_acquired_phone_number("57 300-000-001"), "+57300000001")
+        self.assertEqual(sms_activation_helpers.activation_price_from_payload({"activationCost": "0.0210"}), "0.0210")
+        self.assertEqual(
+            sms_activation_helpers.activation_result(" act-1 ", "57 300-000-001", price="0.0210"),
+            {"activation_id": "act-1", "phone_number": "+57300000001", "price": "0.0210"},
+        )
+        self.assertEqual(sms_activation_helpers.extract_sms_code({"sms": [{"text": "OpenAI code 654321"}]}), "654321")
+        self.assertEqual(sms_activation_helpers.extract_5sim_sms_code({"sms": [{"code": "123456"}]}), "123456")
+
+    def test_oauth_token_flow_sms_helper_wrappers_remain_available(self):
+        self.assertEqual(flow._normalize_sms_provider("five"), sms_activation_helpers.normalize_sms_provider("five"))
+        self.assertEqual(flow._normalize_hero_sms_price("$0.02340"), sms_activation_helpers.normalize_hero_sms_price("$0.02340"))
+        self.assertEqual(flow._extract_sms_code("STATUS_OK:654321"), "654321")
+        self.assertEqual(flow._activation_result("act", "57300000001"), {"activation_id": "act", "phone_number": "+57300000001"})
+
+    def test_sms_activation_catalog_collects_nested_prices_and_wrapper_matches(self):
+        payload = {
+            "0.017": "2",
+            "nested": {
+                "cost": "0.023",
+                "count": "4",
+            },
+            "empty": {
+                "0.031": {"quantity": 0},
+            },
+        }
+
+        direct = sms_activation_catalog.collect_hero_sms_price_candidates(payload)
+        wrapped = flow._collect_hero_sms_price_candidates(payload)
+        with_zero_stock = sms_activation_catalog.collect_hero_sms_price_candidates(payload, include_zero_stock=True)
+
+        self.assertEqual(direct, wrapped)
+        self.assertEqual(
+            direct,
+            [
+                {"price": 0.017, "stock": 2, "display_quantity": 2},
+                {"price": 0.023, "stock": 4, "display_quantity": 4},
+            ],
+        )
+        self.assertIn({"price": 0.031, "stock": 0, "display_quantity": 0}, with_zero_stock)
+        self.assertEqual(sms_activation_catalog.build_sorted_unique_price_candidates(["0.023", 0.017, "bad", 0.023]), [0.017, 0.023])
+
+    def test_sms_activation_catalog_price_summary_uses_injected_5sim_request(self):
+        calls = []
+
+        def fake_fivesim_request(_config, path, params=None):
+            calls.append((path, params))
+            return {"openai": {"Price": "0.12", "Qty": "3"}}
+
+        config = flow.HeroSMSConfig(
+            provider="5sim",
+            api_key="k",
+            base_url=flow.FIVESIM_BASE_URL,
+            country="england",
+            service="openai",
+            min_price=0.05,
+            max_price=0.13,
+        )
+
+        summary = sms_activation_catalog.fetch_hero_sms_price_summary(
+            config,
+            hero_sms_request_fn=lambda *_args, **_kwargs: self.fail("hero request should not be used"),
+            fivesim_request_fn=fake_fivesim_request,
+        )
+
+        self.assertEqual(calls, [("/guest/products/england/any", None)])
+        self.assertEqual(summary["lowest_price"], 0.12)
+        self.assertEqual(summary["tiers"], [{"price": 0.12, "stock": 3, "quantity": 3}])
+        self.assertEqual(summary["effective_prices"], [0.12])
+
+    def test_sms_activation_catalog_quote_list_parses_operators(self):
+        class FakeResponse:
+            ok = True
+            status_code = 200
+
+            def json(self):
+                return {
+                    "data": {
+                        "dr": {
+                            "operators": [
+                                {
+                                    "name": "any",
+                                    "localName": "Any",
+                                    "freePriceOffers": {"0.023": 2, "0.017": 1},
+                                    "rentOffers": {"0": {"2": {"price": "0.05", "count": 4}}},
+                                }
+                            ]
+                        }
+                    }
+                }
+
+        config = flow.HeroSMSConfig(provider="hero_sms", api_key="k", country="151", service="dr")
+
+        with patch.object(sms_activation_catalog.requests, "get", return_value=FakeResponse()) as mock_get:
+            quote = sms_activation_catalog.fetch_hero_sms_quote_list(config)
+
+        self.assertEqual(mock_get.call_args.args[0], "https://hero-sms.com/api/v1/left-menu/service/dr/country/151/offers")
+        self.assertEqual(quote["operator_name"], "any")
+        self.assertEqual(quote["quote_list"], [{"price": 0.023, "quantity": 2}, {"price": 0.017, "quantity": 1}])
+        self.assertEqual(
+            quote["rent_list"],
+            [{"operator_name": "any", "operator_label": "Any", "hours": 2, "price": 0.05, "quantity": 4}],
+        )
+
+    def test_sms_activation_flow_acquire_retries_wrong_max_price_with_injected_functions(self):
+        calls = []
+
+        def fake_hero_request(_config, params):
+            calls.append(params)
+            if len(calls) == 1:
+                return "WRONG_MAX_PRICE:0.023"
+            return "ACCESS_NUMBER:act-1:15551234567"
+
+        config = flow.HeroSMSConfig(provider="hero_sms", api_key="k", country="151", max_price=0.05)
+
+        result = sms_activation_flow.acquire_hero_sms_phone(
+            config,
+            hero_sms_request_fn=fake_hero_request,
+            fivesim_request_fn=lambda *_args, **_kwargs: self.fail("5sim request should not be used"),
+            quote_list_fn=lambda _config: {"quote_list": []},
+            exact_request_price_fn=lambda _config, _price_limit: "0.0230",
+        )
+
+        self.assertEqual([call["maxPrice"] for call in calls], [0.05, 0.023])
+        self.assertEqual(result, {"activation_id": "act-1", "phone_number": "+15551234567", "price": "0.0230"})
+
+    def test_sms_activation_flow_poll_uses_injected_5sim_request(self):
+        calls = []
+
+        def fake_fivesim_request(_config, path, params=None):
+            calls.append((path, params))
+            return {"status": "RECEIVED", "sms": [{"code": "123456"}]}
+
+        config = flow.HeroSMSConfig(provider="5sim", api_key="k", base_url=flow.FIVESIM_BASE_URL, wait_timeout=15)
+
+        code = sms_activation_flow.poll_hero_sms_code(
+            config,
+            "12345",
+            hero_sms_request_fn=lambda *_args, **_kwargs: self.fail("hero request should not be used"),
+            fivesim_request_fn=fake_fivesim_request,
+            datetime_module=real_datetime,
+            sleep_fn=lambda _seconds: self.fail("sleep should not be used when code arrives"),
+            resend_after_default=30,
+            timeout_after_resend_default=60,
+            release_after_default=120,
+        )
+
+        self.assertEqual(code, "123456")
+        self.assertEqual(calls, [("/user/check/12345", None)])
+
+    def test_sms_activation_client_hero_request_adds_key_and_labels_errors(self):
+        calls = []
+
+        class FakeResponse:
+            status_code = 200
+            text = '{"ok": true}'
+
+            def json(self):
+                return {"ok": True}
+
+        def fake_get(url, **kwargs):
+            calls.append((url, kwargs))
+            return FakeResponse()
+
+        config = flow.HeroSMSConfig(provider="smsbower", api_key=" secret ", base_url="https://sms.example/api")
+
+        with patch.object(sms_activation_client.requests, "get", side_effect=fake_get):
+            payload = sms_activation_client.hero_sms_request(config, {"action": "getBalance"})
+
+        self.assertEqual(payload, {"ok": True})
+        self.assertEqual(calls[0][0], "https://sms.example/api")
+        self.assertEqual(calls[0][1]["params"], {"api_key": "secret", "action": "getBalance"})
+        self.assertEqual(calls[0][1]["timeout"], 30)
+
+    def test_sms_activation_client_5sim_request_uses_bearer_header_and_clean_path(self):
+        calls = []
+
+        class FakeResponse:
+            status_code = 200
+            text = '{"id": 1}'
+
+            def json(self):
+                return {"id": 1}
+
+        def fake_get(url, **kwargs):
+            calls.append((url, kwargs))
+            return FakeResponse()
+
+        config = flow.HeroSMSConfig(provider="5sim", api_key=" five-key ", base_url="https://5sim.example/v1/")
+
+        with patch.object(sms_activation_client.requests, "get", side_effect=fake_get):
+            payload = sms_activation_client.fivesim_request(config, "user/check/123", {"x": 1})
+
+        self.assertEqual(payload, {"id": 1})
+        self.assertEqual(calls[0][0], "https://5sim.example/v1/user/check/123")
+        self.assertEqual(calls[0][1]["params"], {"x": 1})
+        self.assertEqual(calls[0][1]["headers"]["Authorization"], "Bearer five-key")
+        self.assertEqual(calls[0][1]["headers"]["Accept"], "application/json")
+
     def test_enrich_mailbox_with_bind_mail_provider_carries_cloudflare_config(self):
         mailbox = {"phone_number": "+15551234567", "bind_email": "bind@example.com"}
         mail_config = {
@@ -3460,6 +4064,65 @@ class SMSProviderTests(unittest.TestCase):
         self.assertEqual(cfg.provider, "5sim")
         self.assertEqual(cfg.api_key, "five-key")
 
+    def test_task_sms_config_uses_register_sms_fallback_values(self):
+        payload = task_sms_config.sms_payload_with_webui_fallback(
+            {"sms_provider": "", "sms_api_key": ""},
+            lambda: {
+                "register": {
+                    "sms_provider": "smsbower",
+                    "smsbower_api_key": "saved-bower-key",
+                    "hero_sms_country": "1003",
+                    "sms_wait_timeout": 77,
+                }
+            },
+        )
+
+        self.assertEqual(payload["sms_provider"], "smsbower")
+        self.assertEqual(payload["smsbower_api_key"], "saved-bower-key")
+        self.assertEqual(payload["hero_sms_country"], "1003")
+        self.assertEqual(payload["sms_wait_timeout"], 77)
+
+    def test_task_sms_config_keeps_explicit_provider_key_from_inheriting_provider(self):
+        payload = task_sms_config.sms_payload_with_webui_fallback(
+            {"hero_sms_api_key": "explicit-hero-key"},
+            lambda: {"register": {"sms_provider": "smsbower", "smsbower_api_key": "saved-bower-key"}},
+        )
+
+        self.assertNotIn("sms_provider", payload)
+        self.assertEqual(payload["hero_sms_api_key"], "explicit-hero-key")
+
+    def test_task_sms_lookup_filters_hidden_countries(self):
+        config = flow.HeroSMSConfig(provider="hero_sms", api_key="hero-key", country="16")
+
+        result = task_sms_lookup.hero_country_lookup(
+            {},
+            sms_config_from_payload_fn=lambda payload: config,
+            fetch_countries_fn=lambda cfg: [
+                {"id": "16", "label": "United Kingdom", "eng": "United Kingdom", "visible": True},
+                {"id": "999", "label": "Hidden", "eng": "Hidden", "visible": False},
+            ],
+        )
+
+        self.assertEqual(result["selected_country"], "16")
+        self.assertEqual([item["id"] for item in result["items"]], ["16"])
+
+    def test_task_sms_lookup_formats_hero_quote_summary(self):
+        config = flow.HeroSMSConfig(provider="hero_sms", api_key="hero-key", country="16")
+
+        result = task_sms_lookup.hero_price_lookup(
+            {},
+            sms_config_from_payload_fn=lambda payload: config,
+            fetch_countries_fn=lambda cfg: [{"id": "16", "eng": "United Kingdom"}],
+            fetch_price_summary_fn=lambda cfg, country_label="": {"country_label": country_label, "summary": "base"},
+            fetch_quote_list_fn=lambda cfg: {
+                "operator_count": 2,
+                "quote_list": [{"price": 0.0123, "quantity": 4}, {"price": 0.02, "quantity": 6}],
+            },
+        )
+
+        self.assertEqual(result["country_label"], "\u82f1\u683c\u5170")
+        self.assertEqual(result["summary"], "Operators: 2; Price tiers: 2; $0.0123 x4 | $0.0200 x6")
+
     def test_webui_config_migrates_saved_5sim_generic_key_to_dedicated_key(self):
         with tempfile.TemporaryDirectory() as tmpdir, \
              patch("regpilot.api_tasks.WEBUI_CONFIG_PATH", Path(tmpdir) / "webui_config.json"), \
@@ -3473,6 +4136,21 @@ class SMSProviderTests(unittest.TestCase):
             config = fastapi_api._load_webui_config()
 
         self.assertEqual(config["hero_phone_bind"]["fivesim_api_key"], "five-key")
+
+    def test_webui_config_store_migrates_legacy_sms_values(self):
+        merged = webui_config_store.merge_webui_config(
+            {
+                "hero_phone_bind": {
+                    "hero_sms_wait_timeout": 77,
+                    "sms_provider": "5sim",
+                    "sms_api_key": "five-key",
+                }
+            },
+            api_tasks.WEBUI_CONFIG_DEFAULTS,
+        )
+
+        self.assertEqual(merged["hero_phone_bind"]["sms_wait_timeout"], 77)
+        self.assertEqual(merged["hero_phone_bind"]["fivesim_api_key"], "five-key")
 
     def test_cpa_oauth_proxy_does_not_fallback_to_register_proxy(self):
         saved = {"register": {"proxy": "http://127.0.0.1:7890", "codex2api_proxy_url": ""}}
@@ -3787,7 +4465,7 @@ class StabilityTests(unittest.TestCase):
         self.assertEqual(session.calls[0][2]["timeout"], 7)
 
     def test_sentinel_token_generator_rejects_expensive_pow(self):
-        generator = register_core.SentinelTokenGenerator("device-1", "ua")
+        generator = registration_sentinel.SentinelTokenGenerator("device-1", "ua")
 
         with self.assertRaises(TimeoutError) as caught:
             generator.generate_token("seed", "00000")
@@ -3795,16 +4473,41 @@ class StabilityTests(unittest.TestCase):
         self.assertIn("sentinel_pow_too_hard", str(caught.exception))
 
     def test_sentinel_token_generator_times_out_long_pow_search(self):
-        generator = register_core.SentinelTokenGenerator("device-1", "ua")
+        generator = registration_sentinel.SentinelTokenGenerator("device-1", "ua")
         ticks = iter([0.0, 0.0, 9.0])
 
-        with patch("regpilot.register_core.time.time", side_effect=lambda: next(ticks, 9.0)), \
+        with patch("regpilot.registration_sentinel.time.time", side_effect=lambda: next(ticks, 9.0)), \
              patch.object(generator, "_get_config", return_value=[0] * 18), \
-             patch.object(register_core.SentinelTokenGenerator, "_fnv1a_32", return_value="ffffffff"):
+             patch.object(registration_sentinel.SentinelTokenGenerator, "_fnv1a_32", return_value="ffffffff"):
             with self.assertRaises(TimeoutError) as caught:
                 generator.generate_token("seed", "7")
 
         self.assertEqual(str(caught.exception), "sentinel_pow_timeout")
+
+    def test_build_sentinel_token_uses_session_response_and_pow(self):
+        class FakeResponse:
+            status_code = 200
+
+            def json(self):
+                return {"token": "token-1", "proofofwork": {"required": True, "seed": "seed-1", "difficulty": "f"}}
+
+        class FakeSession:
+            def __init__(self):
+                self.calls = []
+
+            def post(self, url, **kwargs):
+                self.calls.append((url, kwargs))
+                return FakeResponse()
+
+        session = FakeSession()
+        with patch.object(registration_sentinel.SentinelTokenGenerator, "generate_requirements_token", return_value="requirements"), \
+             patch.object(registration_sentinel.SentinelTokenGenerator, "generate_token", return_value="pow-token") as mock_pow:
+            raw = registration_sentinel.build_sentinel_token(session, "device-1", "login")
+
+        payload = json.loads(raw)
+        self.assertEqual(payload, {"p": "pow-token", "t": "", "c": "token-1", "id": "device-1", "flow": "login"})
+        self.assertEqual(json.loads(session.calls[0][1]["data"])["p"], "requirements")
+        mock_pow.assert_called_once_with("seed-1", "f")
 
     def test_webui_config_loader_returns_shared_defaults(self):
         with tempfile.TemporaryDirectory() as tmpdir, patch("regpilot.api_tasks.WEBUI_CONFIG_PATH", Path(tmpdir) / "webui_config.json"):
@@ -4058,6 +4761,35 @@ class StabilityTests(unittest.TestCase):
         self.assertEqual(cfg.mail.providers[1]["domain"], "cf.test")
         self.assertEqual([item["type"] for item in mail_config["providers"]], ["icloud", "cloudflare-temp-email"])
 
+    def test_task_payload_config_builds_shared_mail_provider_list(self):
+        payload = {
+            "mail_type": "icloud",
+            "icloud_imap_user": "owner@icloud.com",
+            "cf_temp_base_url": "https:/mail.cf.test",
+            "cf_temp_admin_auth": "admin-secret",
+            "cf_temp_domain": "cf.test",
+        }
+
+        providers = task_payload_config.mail_providers_from_payload(payload)
+
+        self.assertEqual([item["type"] for item in providers], ["icloud", "cloudflare-temp-email"])
+        self.assertEqual(providers[1]["base_url"], "https://mail.cf.test")
+
+    def test_task_payload_config_register_config_accepts_legacy_sms_retry_keys(self):
+        cfg = task_payload_config.register_config_from_payload(
+            {
+                "hero_sms_auto_retry": "true",
+                "hero_sms_retry_count": "4",
+                "hero_sms_wait_timeout": "90",
+                "hero_sms_wait_interval": "6",
+            }
+        )
+
+        self.assertIs(cfg.hero_sms_auto_retry, True)
+        self.assertEqual(cfg.hero_sms_retry_count, 4)
+        self.assertEqual(cfg.hero_sms_wait_timeout, 90)
+        self.assertEqual(cfg.hero_sms_wait_interval, 6)
+
     def test_task_builders_include_hotmail_api_provider(self):
         payload = {
             "mail_type": "hotmail-api",
@@ -4101,6 +4833,9 @@ class StabilityTests(unittest.TestCase):
         self.assertIn("function boolValue", html)
         self.assertIn("boolValue(h.env_random_enabled ?? r.env_random_enabled ?? false)", html)
         self.assertIn("boolValue(h.sms_auto_retry ?? r.sms_auto_retry ?? h.hero_sms_auto_retry ?? r.hero_sms_auto_retry ?? false)", html)
+        self.assertIn("sms_auto_retry:checked('sms_auto_retry')", html)
+        self.assertIn("sms_wait_timeout:Math.max(15,Number(val('sms_wait_timeout')||60))", html)
+        self.assertNotIn("baseTaskValues", html)
 
     def test_reauthorize_job_rejects_unknown_sms_provider_before_job_start(self):
         payload = fastapi_api.ReauthorizeAutoRequest(account_id="acc-1", sms_provider="smsbwoer", hero_sms_api_key="sms-key")
@@ -4114,8 +4849,19 @@ class StabilityTests(unittest.TestCase):
         self.assertEqual(ctx.exception.detail, "invalid_sms_provider")
 
     def test_webui_translates_sms_price_shortage_errors(self):
-        self.assertIn("可用最低价", fastapi_api.FASTAPI_INDEX_HTML)
-        self.assertIn("请提高最高价或更换国家", fastapi_api.FASTAPI_INDEX_HTML)
+        html = fastapi_api.FASTAPI_INDEX_HTML
+
+        self.assertIn("可用最低价", html)
+        self.assertIn("请提高最高价或更换国家", html)
+        self.assertIn("function translateBaseDetails", html)
+        self.assertIn("function translateSmsPriceShortageDetails", html)
+        self.assertIn("function translateConfigDetails", html)
+        self.assertIn("function translateTaskErrorDetails", html)
+        self.assertEqual(html.count("function translateDetails"), 1)
+        self.assertEqual(html.count("function translateLogLine"), 1)
+        self.assertEqual(html.count("function translateLogOutput"), 1)
+        self.assertNotIn("baseTranslateDetails", html)
+        self.assertNotIn("translateDetails=function", html)
 
     def test_webui_async_account_actions_show_failures(self):
         html = fastapi_api.FASTAPI_INDEX_HTML
@@ -4198,10 +4944,16 @@ class StabilityTests(unittest.TestCase):
         self.assertIn("价格 ${price}", html)
         self.assertIn("status-summary-sticky", html)
         self.assertIn("function renderStatusSummary", html)
+        self.assertIn("function taskStatusView", html)
+        self.assertIn("function renderTaskStatusPanel", html)
+        self.assertNotIn("summarizeResultRows=function", html)
+        self.assertNotIn("renderTaskStatus=function", html)
+        self.assertIn("lastJobItems=items", html)
+        self.assertNotIn("baseLoadJobs", html)
         self.assertNotIn('id="taskStatusDock"', html)
         self.assertNotIn("task-status-dock-visible", html)
         self.assertNotIn("function renderTaskStatusDock", html)
-        self.assertIn("${active&&steps.length?", html)
+        self.assertIn("${view.active&&view.steps.length?", html)
         self.assertIn("任务结束：成功 ${counts.success}", html)
         self.assertNotIn("失败 ${counts.failure}；${message}", html)
 
@@ -4537,6 +5289,30 @@ class StabilityTests(unittest.TestCase):
         self.assertEqual(out["success_count"], 2)
         self.assertEqual([item["email"] for item in out["items"]], ["one@example.com", "two@example.com"])
 
+    def test_task_register_runner_calculates_attempt_limit(self):
+        attempts = task_register_runner.registration_attempt_limit(
+            2,
+            {"registration_disallowed_retry_count": "3"},
+        )
+
+        self.assertEqual(attempts, 6)
+
+    def test_task_register_runner_summarizes_registration_result(self):
+        item = register_core.RegistrationResult(
+            ok=True,
+            email="one@example.com",
+            access_token="token",
+            callback_url="http://callback",
+            mailbox={"_callback_url": "http://mailbox-callback", "_cpa_submit_ok": True, "_cpa_submit_message": "ok"},
+        )
+
+        summary = task_register_runner.summarize_registration_result(item)
+
+        self.assertEqual(summary["email"], "one@example.com")
+        self.assertEqual(summary["callback_url"], "http://mailbox-callback")
+        self.assertTrue(summary["has_access_token"])
+        self.assertTrue(summary["import_submit_ok"])
+
     def test_run_register_retries_registration_disallowed_until_target_met(self):
         results = [
             register_core.RegistrationResult(ok=False, email="blocked@example.com", error="registration_disallowed", mailbox={}),
@@ -4558,6 +5334,30 @@ class StabilityTests(unittest.TestCase):
         self.assertEqual(out["failures"][0]["error"], "registration_disallowed")
         self.assertIn("阶段：注册尝试 1/6", buf.getvalue())
         self.assertIn("阶段：本次被上游拒绝创建账号", buf.getvalue())
+
+    def test_job_log_maintenance_reads_max_bytes_from_config(self):
+        max_bytes = job_log_maintenance.job_log_max_bytes(lambda: {"logs": {"job_log_max_mb": "2"}})
+
+        self.assertEqual(max_bytes, 2 * 1024 * 1024)
+
+    def test_job_log_maintenance_prunes_oldest_logs_only(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_dir = Path(tmpdir)
+            old_log = log_dir / "old.log"
+            newer_log = log_dir / "newer.log"
+            ignored_json = log_dir / "keep.json"
+            old_log.write_bytes(b"a" * 10)
+            newer_log.write_bytes(b"b" * 10)
+            ignored_json.write_bytes(b"c" * 10)
+            os.utime(old_log, (1000, 1000))
+            os.utime(newer_log, (2000, 2000))
+            os.utime(ignored_json, (500, 500))
+
+            job_log_maintenance.prune_job_logs(log_dir, lambda: 10)
+
+            self.assertFalse(old_log.exists())
+            self.assertTrue(newer_log.exists())
+            self.assertTrue(ignored_json.exists())
 
     def test_job_store_uses_chinese_stage_lines_for_current_stage(self):
         store = api_tasks.JobStore()
@@ -4989,6 +5789,7 @@ class ReauthorizePhoneVerificationTests(unittest.TestCase):
                  ("", {"create_account_error_code": "missing_email", "missing_email_continue_url": f"{register_core.auth_base}/add-email?from=about-you"}),
                  ("http://localhost:1455/auth/callback?code=cb&state=state-1", {"callback_ready": True}),
              ]) as mock_about_you, \
+             patch.object(reauth, "_prepare_bind_mailbox", return_value=("alias@icloud.com", {"provider": "icloud", "email": "alias@icloud.com", "bind_email": "alias@icloud.com"})), \
              patch.object(reauth, "_continue_with_optional_add_email", return_value=(f"{register_core.auth_base}/about-you", "alias@icloud.com")) as mock_add_email, \
              patch.object(reauth, "_submit_callback_to_cpa", return_value={"ok": True, "message": "CPA callback submitted"}), \
              patch.object(reauth, "_finalize_cpa_submit_with_optional_local_tokens", return_value=reauth.ReauthorizeAutoOutcome(ok=True, message="CPA callback submitted", callback_url="http://localhost:1455/auth/callback?code=cb&state=state-1", codex2api_import_submit_ok=True)):
@@ -5711,6 +6512,485 @@ class ReauthorizePhoneVerificationTests(unittest.TestCase):
 
         self.assertTrue(info["ok"])
         self.assertIn("/log-in/password?state=state-1", captured["headers"]["referer"])
+
+
+class TaskErrorMessageTests(unittest.TestCase):
+    def test_task_error_message_maps_registration_codes(self):
+        self.assertEqual(task_error_messages.zh_task_error("login_password_403"), "密码登录失败（状态码=403）")
+        self.assertEqual(task_error_messages.zh_task_error("send_otp_429"), "发送验证码失败（状态码=429）")
+        self.assertEqual(task_error_messages.zh_task_error("validate_otp_400"), "验证码校验失败（状态码=400）")
+        self.assertEqual(
+            task_error_messages.zh_task_error("account_not_created_registration_disallowed"),
+            "账号未创建：about-you 被上游拒绝",
+        )
+        self.assertEqual(task_error_messages.zh_task_error(""), "-")
+        self.assertEqual(task_error_messages.zh_task_error("upstream_raw_error"), "upstream_raw_error")
+
+    def test_job_message_keeps_email_otp_context(self):
+        self.assertEqual(task_error_messages.zh_job_message("wait_for_code_timeout"), "等待邮箱验证码超时")
+        self.assertEqual(task_error_messages.zh_job_message("send_otp_429"), "发送邮箱验证码失败（状态码=429）")
+        self.assertEqual(task_error_messages.zh_job_message("validate_otp_400"), "邮箱验证码校验失败（状态码=400）")
+        self.assertEqual(
+            task_error_messages.zh_job_message("phone_verification_after_bind_email_failed"),
+            "绑定邮箱后手机二次验证失败",
+        )
+
+    def test_legacy_wrappers_delegate_to_shared_messages(self):
+        self.assertEqual(api_tasks._zh_task_error("send_otp_429"), task_error_messages.zh_task_error("send_otp_429"))
+        self.assertEqual(api_presenters._zh_job_message("send_otp_429"), task_error_messages.zh_job_message("send_otp_429"))
+
+
+class RegistrationAboutYouTests(unittest.TestCase):
+    def test_api_payloads_prefer_visible_age_without_form_consent_fields(self):
+        page_html = (
+            '<form action="/about-you">'
+            '<input name="name">'
+            '<input name="age">'
+            '<input type="hidden" name="birthday" value="2026-05-27">'
+            '<input type="hidden" name="isExplicitConsentRequired" value="true">'
+            '<input type="checkbox" name="explicitConsent" value="true" required>'
+            '</form>'
+        )
+
+        payloads = registration_about_you.about_you_create_account_payloads("Test User", "1999-09-19", page_html)
+
+        self.assertEqual(
+            payloads[0],
+            {"name": "Test User", "age": str(registration_about_you.age_from_birthdate("1999-09-19"))},
+        )
+        self.assertTrue(all("isExplicitConsentRequired" not in payload for payload in payloads))
+        self.assertTrue(all("explicitConsent" not in payload for payload in payloads))
+
+    def test_form_payloads_preserve_hidden_and_consent_fields(self):
+        page_html = (
+            '<form action="/about-you">'
+            '<input name="name">'
+            '<input name="age">'
+            '<input type="hidden" name="isExplicitConsentRequired" value="true">'
+            '<input type="checkbox" name="explicitConsent" value="true" required>'
+            '</form>'
+        )
+        hidden = {"csrf": "token-1", "birthday": "old-value"}
+
+        payloads = registration_about_you.about_you_form_payloads(
+            hidden=hidden,
+            full_name="Test User",
+            birthdate="1999-09-19",
+            page_context=page_html,
+        )
+
+        self.assertEqual(payloads[0]["csrf"], "token-1")
+        self.assertEqual(payloads[0]["isExplicitConsentRequired"], "true")
+        self.assertEqual(payloads[0]["explicitConsent"], "true")
+        self.assertEqual(payloads[0]["age"], str(registration_about_you.about_you_form_age_from_birthdate("1999-09-19")))
+        self.assertNotIn("birthday", payloads[0])
+        self.assertTrue(any(payload.get("allCheckboxes") == "on" for payload in payloads))
+
+    def test_register_core_about_you_wrappers_remain_available(self):
+        page_html = '<form action="/about-you"><input name="name"><input name="birthdate"></form>'
+
+        self.assertEqual(register_core._about_you_page_shape(page_html), registration_about_you.about_you_page_shape(page_html))
+        self.assertEqual(
+            register_core._about_you_create_account_payloads("Test User", "1999-09-19", page_html),
+            registration_about_you.about_you_create_account_payloads("Test User", "1999-09-19", page_html),
+        )
+
+
+class RegistrationResponseTests(unittest.TestCase):
+    def test_response_json_returns_dict_only(self):
+        self.assertEqual(registration_responses.response_json(SimpleNamespace(json=lambda: {"ok": True})), {"ok": True})
+        self.assertEqual(registration_responses.response_json(SimpleNamespace(json=lambda: ["not", "dict"])), {})
+
+        def raise_json():
+            raise ValueError("bad json")
+
+        self.assertEqual(registration_responses.response_json(SimpleNamespace(json=raise_json)), {})
+
+    def test_accounts_error_code_prefers_nested_error_code(self):
+        info = {
+            "json": {
+                "code": "outer_code",
+                "error": {"code": "inner_code", "type": "inner_type"},
+            }
+        }
+
+        self.assertEqual(registration_responses.accounts_error_code(info), "inner_code")
+        self.assertEqual(register_core._accounts_error_code(info), "inner_code")
+
+    def test_response_error_summary_includes_status_code_and_trimmed_message(self):
+        summary = registration_responses.response_error_summary(
+            "register_user",
+            {"status": 400, "json": {"code": "bad_request", "message": "x" * 200}},
+        )
+
+        self.assertTrue(summary.startswith("register_user_400: bad_request: "))
+        self.assertEqual(len(summary.rsplit(": ", 1)[-1]), 160)
+        self.assertEqual(register_core._response_error_summary("register_user", {"status": 500, "json": {}}), "register_user_500")
+
+
+class RegistrationCallbackTests(unittest.TestCase):
+    def test_callback_params_from_url_text_and_response(self):
+        callback_url = "http://localhost:1455/auth/callback?code=cb123&state=state-1&scope=openid"
+
+        self.assertEqual(
+            registration_callback.extract_oauth_callback_params_from_url(callback_url),
+            {"code": "cb123", "state": "state-1", "scope": "openid"},
+        )
+        self.assertEqual(
+            register_core.extract_oauth_callback_params_from_url(callback_url),
+            registration_callback.extract_oauth_callback_params_from_url(callback_url),
+        )
+        self.assertEqual(
+            registration_callback.extract_oauth_callback_params_from_text('{"next":"\\/auth\\/callback?code=rel&state=s1"}'),
+            {"code": "rel", "state": "s1", "scope": ""},
+        )
+        response = SimpleNamespace(url="", headers={}, text="", json=lambda: {"continue_url": callback_url})
+        self.assertEqual(registration_callback.extract_oauth_callback_params_from_response(response)["code"], "cb123")
+        self.assertEqual(register_core._extract_oauth_callback_params_from_response(response)["code"], "cb123")
+
+
+class RegistrationStateTests(unittest.TestCase):
+    def test_state_from_info_recognizes_core_pages(self):
+        cases = [
+            ({"final_url": "https://auth.openai.com/log-in/password", "json": {}, "text": ""}, "password"),
+            ({"final_url": "https://auth.openai.com/add-email", "json": {}, "text": ""}, "add_email"),
+            ({"final_url": "https://auth.openai.com/email-verification", "json": {}, "text": ""}, "email_otp"),
+            ({"final_url": "https://auth.openai.com/about-you", "json": {}, "text": '<input name="age">'}, "about_you"),
+            ({"final_url": "http://localhost:1455/auth/callback?code=cb&state=s1", "json": {}, "text": ""}, "callback"),
+        ]
+
+        for info, expected in cases:
+            with self.subTest(expected=expected):
+                self.assertEqual(registration_state.registration_state_from_info(info)["kind"], expected)
+                self.assertEqual(register_core._registration_state_from_info(info)["kind"], expected)
+
+    def test_expected_state_and_brief_url(self):
+        registrar = SimpleNamespace(last_authorize={"state": "last-state"})
+
+        self.assertEqual(registration_state.registration_expected_state(registrar, {}, {}), "last-state")
+        self.assertEqual(
+            registration_state.registration_expected_state(
+                registrar,
+                {"state": "start-state"},
+                {"authorize": {"state": "authorize-state"}},
+            ),
+            "start-state",
+        )
+        self.assertEqual(
+            registration_state.brief_flow_url("https://auth.openai.com/authorize?code=secret-code&state=s1"),
+            "https://auth.openai.com/authorize?code=***",
+        )
+        self.assertEqual(
+            register_core._brief_flow_url("https://auth.openai.com/authorize?state=s1"),
+            "https://auth.openai.com/authorize?state=***",
+        )
+
+    def test_registration_oauth_helpers_load_state_uses_injected_continue_loader(self):
+        state = registration_oauth_helpers.load_registration_state(
+            SimpleNamespace(),
+            "https://auth.openai.com/about-you",
+            load_continue_page_fn=lambda _registrar, _url: {
+                "continue_url": "https://auth.openai.com/email-verification",
+                "page_type": "email_otp_verification",
+                "json": {"page": {"type": "email_otp_verification"}},
+                "text": "",
+                "location": "",
+            },
+            state_from_info_fn=registration_state.registration_state_from_info,
+        )
+
+        self.assertEqual(state["kind"], "email_otp")
+        self.assertEqual(state["raw"]["page_type"], "email_otp_verification")
+
+    def test_registration_oauth_helpers_wait_otp_resends_after_initial_miss(self):
+        calls = []
+        mailbox = {}
+
+        class Registrar:
+            def send_otp(self):
+                calls.append("send_otp")
+                return {"ok": True, "status": 200, "final_url": "https://auth.openai.com/email-verification"}
+
+        def fake_wait(_config, _mailbox):
+            calls.append("wait")
+            return "" if calls.count("wait") == 1 else "123456"
+
+        code = registration_oauth_helpers.wait_email_otp_with_resend(
+            object(),
+            Registrar(),
+            mailbox,
+            wait_for_code_fn=fake_wait,
+            now_ms_fn=lambda: 123000,
+            response_error_summary_fn=lambda prefix, _info: prefix,
+            log_fn=lambda _message: None,
+        )
+
+        self.assertEqual(code, "123456")
+        self.assertEqual(mailbox["_code_after_ts"], 123000)
+        self.assertEqual(calls, ["wait", "send_otp", "wait"])
+
+    def test_registration_oauth_helpers_follow_chatgpt_callback_uses_injected_request(self):
+        calls = []
+
+        def fake_request(_session, method, url, **kwargs):
+            calls.append((method, url, kwargs))
+            return SimpleNamespace(url="https://chatgpt.com/", status_code=200), ""
+
+        result = registration_oauth_helpers.follow_chatgpt_signup_callback(
+            SimpleNamespace(session=object()),
+            register_core.chatgpt_signup_redirect_uri + "?code=cb&state=s1",
+            chatgpt_signup_redirect_uri_value=register_core.chatgpt_signup_redirect_uri,
+            auth_base_value=register_core.auth_base,
+            request_with_retry_fn=fake_request,
+            navigate_headers_fn=lambda: {"x-nav": "1"},
+        )
+
+        self.assertTrue(result["followed"])
+        self.assertEqual(result["status"], 200)
+        self.assertEqual(calls[0][0], "get")
+        self.assertEqual(calls[0][2]["headers"]["referer"], f"{register_core.auth_base}/about-you")
+
+    def test_registration_cpa_oauth_helpers_build_sms_and_mail_config(self):
+        cfg = register_core.RegisterConfig(
+            codex2api_url="http://127.0.0.1:8317",
+            codex2api_admin_key="key",
+            codex2api_auto_import=True,
+        )
+        cfg.sms_provider = "5sim"
+        cfg.sms_api_key = "sms-key"
+        cfg.hero_sms_country = "england"
+        cfg.hero_sms_service = "openai"
+        cfg.sms_wait_timeout = 90
+        cfg.sms_wait_interval = 7
+        cfg.sms_auto_retry = True
+        cfg.sms_retry_count = 4
+        cfg.mail.providers = [{"type": "icloud", "imap_user": "owner@icloud.com"}]
+
+        self.assertTrue(
+            registration_cpa_oauth_helpers.should_use_cpa_oauth_auto_import(
+                cfg,
+                parse_bool_fn=register_core.parse_bool,
+            )
+        )
+
+        from regpilot.reauthorize import _build_reauthorize_sms_config
+
+        sms_config, retry_count = registration_cpa_oauth_helpers.build_cpa_sms_config_and_retry_count(
+            cfg,
+            build_reauthorize_sms_config_fn=_build_reauthorize_sms_config,
+            parse_bool_fn=register_core.parse_bool,
+        )
+
+        self.assertEqual(sms_config.provider, "5sim")
+        self.assertEqual(sms_config.api_key, "sms-key")
+        self.assertEqual(sms_config.country, "england")
+        self.assertEqual(sms_config.wait_timeout, 90)
+        self.assertEqual(retry_count, 4)
+        self.assertEqual(
+            registration_cpa_oauth_helpers.mail_config_for_add_email(cfg, asdict_fn=register_core.asdict)["providers"][0]["imap_user"],
+            "owner@icloud.com",
+        )
+
+
+class RegistrationArtifactTests(unittest.TestCase):
+    def test_about_you_failure_artifact_writes_json_and_best_html_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = registration_artifacts.save_about_you_failure_artifacts(
+                Path(tmpdir),
+                state={"url": "https://auth.openai.com/about-you", "raw": {"text": "<html>state</html>"}},
+                create_info={"text": "<html>create</html>"},
+                page_snapshot={"text": "<html>snapshot</html>"},
+                page_context="x" * 5000,
+            )
+
+            payload = json.loads(Path(result["json_path"]).read_text(encoding="utf-8"))
+            html = Path(result["html_path"]).read_text(encoding="utf-8")
+
+        self.assertEqual(payload["state_url"], "https://auth.openai.com/about-you")
+        self.assertEqual(len(payload["page_context"]), 4000)
+        self.assertEqual(html, "<html>snapshot</html>")
+
+    def test_about_you_presubmit_artifact_falls_back_to_state_html(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = registration_artifacts.save_about_you_presubmit_artifacts(
+                Path(tmpdir),
+                state={"url": "https://auth.openai.com/about-you", "raw": {"text": "<html>state</html>"}},
+                page_snapshot={},
+                page_context="ctx",
+            )
+
+            html = Path(result["html_path"]).read_text(encoding="utf-8")
+
+        self.assertEqual(html, "<html>state</html>")
+
+
+class RegistrationConsentTests(unittest.TestCase):
+    def test_consent_html_extracts_workspace_and_org_project(self):
+        html_text = (
+            '<input type="hidden" name="workspace_id" value="workspace-html">'
+            '{"orgs":[{"id":"12345678-1234-1234-1234-123456789abc",'
+            '"projects":[{"id":"abcdef12-1234-1234-1234-abcdefabcdef"}]}]}'
+        )
+
+        self.assertEqual(registration_consent.workspace_id_from_consent_html(html_text), "workspace-html")
+        self.assertEqual(register_core._workspace_id_from_consent_html(html_text), "workspace-html")
+        self.assertEqual(
+            registration_consent.org_project_from_consent_html(html_text),
+            ("12345678-1234-1234-1234-123456789abc", "abcdef12-1234-1234-1234-abcdefabcdef"),
+        )
+        self.assertEqual(
+            register_core._org_project_from_consent_html(html_text),
+            ("12345678-1234-1234-1234-123456789abc", "abcdef12-1234-1234-1234-abcdefabcdef"),
+        )
+
+    def test_consent_form_inputs_pick_best_form_and_submit_action(self):
+        html_text = """
+        <form action="/ignore">
+          <input type="hidden" name="state" value="bad">
+          <button type="submit">Continue</button>
+        </form>
+        <form action="/authorize">
+          <input type="hidden" name="state" value="good">
+          <input type="checkbox" name="agree" value="yes" checked>
+          <button type="submit" name="intent" value="allow" formaction="/allow">Allow Codex</button>
+        </form>
+        """
+
+        action, payload = registration_consent.extract_consent_form_inputs(html_text)
+
+        self.assertEqual(action, "/allow")
+        self.assertEqual(payload["state"], "good")
+        self.assertEqual(payload["agree"], "yes")
+        self.assertEqual(payload["intent"], "allow")
+        self.assertEqual(register_core._extract_consent_form_inputs(html_text), (action, payload))
+
+
+class RegistrationSessionTests(unittest.TestCase):
+    def _client_auth_token(self, payload: dict) -> str:
+        encoded = base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8")).rstrip(b"=").decode("ascii")
+        return f"{encoded}.signature"
+
+    def test_cookie_snapshot_and_client_auth_summary(self):
+        token = self._client_auth_token({"session_id": "sess-1", "workspaces": [{"id": "workspace-1"}]})
+
+        class Cookie:
+            def __init__(self, name, value, domain):
+                self.name = name
+                self.value = value
+                self.domain = domain
+
+        class Jar:
+            def __init__(self, cookies):
+                self.cookies = cookies
+
+            def get(self, name, domain=None):
+                for cookie in self.cookies:
+                    if cookie.name == name and (domain is None or cookie.domain == domain):
+                        return cookie.value
+                return None
+
+            def __iter__(self):
+                return iter(self.cookies)
+
+        session = SimpleNamespace(
+            cookies=Jar(
+                [
+                    Cookie("oai-client-auth-session", "wrong", "other.example"),
+                    Cookie("oai-client-auth-session", token, ".auth.openai.com"),
+                    Cookie("oai-did", "did-1", "auth.openai.com"),
+                ]
+            )
+        )
+
+        snapshot = registration_session.cookie_snapshot(session)
+        summary = registration_session.summarize_cookie_snapshot(snapshot)
+
+        self.assertEqual(snapshot["oai-client-auth-session"], token)
+        self.assertEqual(registration_session.get_session_workspace_id(session), "workspace-1")
+        self.assertEqual(register_core._get_session_workspace_id(session), "workspace-1")
+        self.assertEqual(summary["client_auth_session"]["keys"], ["session_id", "workspaces"])
+        self.assertTrue(summary["client_auth_session"]["has_workspaces"])
+
+    def test_auth_session_node_finds_workspace_org_project_and_cookie_wrapper(self):
+        nested = {
+            "client_auth_session": self._client_auth_token(
+                {
+                    "nested": {"workspace": {"id": "workspace-nested"}},
+                    "organizations": [{"id": "org-1", "projects": [{"id": "project-1"}]}],
+                }
+            )
+        }
+
+        class Jar:
+            def get(self, name, domain=None):
+                return nested["client_auth_session"] if name == "oai-client-auth-session" else None
+
+            def __iter__(self):
+                return iter(())
+
+        session = SimpleNamespace(cookies=Jar())
+
+        self.assertEqual(registration_session.find_workspace_id_from_auth_session_node(nested), "workspace-nested")
+        self.assertEqual(registration_session.find_org_project_from_auth_session_node(nested), ("org-1", "project-1"))
+        self.assertEqual(registration_session.workspace_id_from_client_auth_session_cookie(session), "workspace-nested")
+        self.assertEqual(register_core._workspace_id_from_client_auth_session_cookie(session), "workspace-nested")
+
+
+class RegistrationIdentityTests(unittest.TestCase):
+    def test_random_password_includes_required_character_classes(self):
+        password = registration_identity.random_password()
+
+        self.assertEqual(len(password), 16)
+        self.assertRegex(password, r"[A-Z]")
+        self.assertRegex(password, r"[a-z]")
+        self.assertRegex(password, r"[0-9]")
+        self.assertTrue(any(char in "!@#$%" for char in password))
+
+    def test_random_birthdate_uses_supported_adult_range(self):
+        birthdate = registration_identity.random_birthdate()
+
+        self.assertRegex(birthdate, r"^(198[5-9]|199[0-9]|200[0-4])-(0[1-9]|1[0-2])-(0[1-9]|1[0-9]|2[0-8])$")
+
+    def test_register_core_identity_wrappers_remain_available(self):
+        first_name, last_name = register_core._random_name()
+
+        self.assertTrue(first_name)
+        self.assertTrue(last_name)
+        self.assertEqual(len(register_core._random_password(12)), 12)
+
+
+class RegistrationEnvironmentTests(unittest.TestCase):
+    def test_environment_context_is_shared_with_register_core_legacy_entrypoints(self):
+        profile = registration_environment.EnvironmentProfile(
+            "Mozilla/5.0 Chrome/140.0.0.0",
+            "fr-FR,fr;q=0.9",
+            "Europe/Paris",
+            1440,
+            900,
+            "http://proxy.example.test:8080",
+            True,
+        )
+
+        with registration_environment.environment_profile_context(profile):
+            self.assertEqual(registration_environment.get_user_agent(), profile.user_agent)
+            self.assertEqual(register_core.get_common_headers()["user-agent"], profile.user_agent)
+            self.assertEqual(register_core.get_common_headers()["accept-language"], profile.accept_language)
+            self.assertIn('v="140"', register_core.get_common_headers()["sec-ch-ua"])
+            self.assertEqual(register_core.current_timezone, profile.timezone)
+
+        self.assertNotEqual(registration_environment.get_user_agent(), profile.user_agent)
+
+    def test_register_core_environment_profile_alias_remains_compatible(self):
+        profile = register_core.prepare_environment_profile_from_payload(
+            {
+                "env_random_enabled": "false",
+                "proxy": "http://proxy.example.test:8080",
+            }
+        )
+
+        self.assertIsInstance(profile, registration_environment.EnvironmentProfile)
+        self.assertFalse(profile.randomized)
+        self.assertEqual(profile.proxy, "http://proxy.example.test:8080")
 
 
 if __name__ == "__main__":

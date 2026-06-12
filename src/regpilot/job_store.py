@@ -9,6 +9,14 @@ from typing import Any, Callable
 from .config import LOG_DIR as DEFAULT_LOG_DIR
 
 
+_RESTORED_JOB_FAILED_TEXT = "\u9636\u6bb5\uff1a\u4efb\u52a1\u5931\u8d25"
+_RESTORED_JOB_STOP_REQUEST_TEXT = "\u7528\u6237\u8bf7\u6c42\u505c\u6b62"
+_RESTORED_JOB_QUEUED_TEXT = "\u4efb\u52a1\u5df2\u6392\u961f"
+_RESTORED_JOB_STARTED_TEXT = "\u4efb\u52a1\u5f00\u59cb\u6267\u884c"
+_RESTORED_STAGE_FAILED = "\u4efb\u52a1\u5931\u8d25"
+_RESTORED_STAGE_STOPPED = "\u4efb\u52a1\u5df2\u505c\u6b62"
+
+
 class JobCancelledError(RuntimeError):
     pass
 
@@ -56,70 +64,121 @@ class JobStore:
             return repaired
         return text
 
-    def _restore_from_disk(self) -> None:
+    def _restore_log_files(self) -> list[Path]:
         try:
-            files = sorted(path for path in self._jobs_log_dir().glob("*.log") if path.is_file())
+            return sorted(path for path in self._jobs_log_dir().glob("*.log") if path.is_file())
         except Exception:
-            files = []
-        for path in files:
-            match = re.match(r"^(\d{8}-\d{6})-(job-(\d+))-(.+)\.log$", path.name)
-            if not match:
+            return []
+
+    def _parse_restored_log_name(self, path: Path) -> tuple[str, str, str, str] | None:
+        match = re.match(r"^(\d{8}-\d{6})-(job-(\d+))-(.+)\.log$", path.name)
+        if not match:
+            return None
+        timestamp_text, raw_job_id, counter_text, raw_kind = match.groups()
+        return timestamp_text, raw_job_id, counter_text, raw_kind
+
+    def _restored_started_at(self, timestamp_text: str) -> str:
+        try:
+            return time.strftime("%Y-%m-%d %H:%M:%S", time.strptime(timestamp_text, "%Y%m%d-%H%M%S"))
+        except Exception:
+            return ""
+
+    def _restored_finished_at(self, path: Path) -> str:
+        try:
+            return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(path.stat().st_mtime))
+        except Exception:
+            return ""
+
+    def _read_restored_output(self, path: Path) -> str:
+        try:
+            output = path.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            output = ""
+        return self._repair_restored_output(output)
+
+    def _restored_status(self, output: str) -> str:
+        lowered = output.lower()
+        if _RESTORED_JOB_FAILED_TEXT in output or "traceback" in lowered:
+            return "failed"
+        if _RESTORED_JOB_STOP_REQUEST_TEXT in output or "job_stopped_by_user" in lowered:
+            return "stopped"
+        if _RESTORED_JOB_QUEUED_TEXT in output and _RESTORED_JOB_STARTED_TEXT not in output:
+            return "stopped"
+        if not output.strip():
+            return "queued"
+        return "done"
+
+    def _restore_job_id(self, raw_job_id: str, timestamp_text: str) -> str:
+        if raw_job_id in self._jobs:
+            return f"{raw_job_id}-{timestamp_text}"
+        return raw_job_id
+
+    def _update_counter_from_restored_job(self, counter_text: str) -> None:
+        try:
+            self._counter = max(self._counter, int(counter_text))
+        except Exception:
+            pass
+
+    def _restored_job(
+        self,
+        *,
+        path: Path,
+        job_id: str,
+        raw_kind: str,
+        status: str,
+        started_at: str,
+        finished_at: str,
+        output: str,
+    ) -> dict[str, Any]:
+        return {
+            "id": job_id,
+            "kind": raw_kind,
+            "status": status,
+            "started_at": started_at,
+            "finished_at": finished_at if status not in {"queued", "running", "stopping"} else "",
+            "result": None,
+            "error": None,
+            "output": self._trim_output(output),
+            "log_path": str(path),
+            "stop_requested": False,
+            "meta": {
+                "stage": "",
+                "current_phone": "",
+            },
+        }
+
+    def _apply_restored_status_stage(self, job: dict[str, Any], status: str) -> None:
+        if status == "failed":
+            job["meta"] = {**(job.get("meta") or {}), "stage": str((job.get("meta") or {}).get("stage") or _RESTORED_STAGE_FAILED)}
+            return
+        if status != "stopped":
+            return
+        stage = str((job.get("meta") or {}).get("stage") or "")
+        if not stage or _RESTORED_JOB_QUEUED_TEXT in stage or _RESTORED_JOB_STOP_REQUEST_TEXT in stage:
+            stage = _RESTORED_STAGE_STOPPED
+        job["meta"] = {**(job.get("meta") or {}), "stage": stage}
+
+    def _restore_from_disk(self) -> None:
+        for path in self._restore_log_files():
+            parsed = self._parse_restored_log_name(path)
+            if not parsed:
                 continue
-            timestamp_text, raw_job_id, counter_text, raw_kind = match.groups()
-            try:
-                started_at = time.strftime("%Y-%m-%d %H:%M:%S", time.strptime(timestamp_text, "%Y%m%d-%H%M%S"))
-            except Exception:
-                started_at = ""
-            try:
-                finished_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(path.stat().st_mtime))
-            except Exception:
-                finished_at = ""
-            try:
-                output = path.read_text(encoding="utf-8", errors="replace")
-            except Exception:
-                output = ""
-            output = self._repair_restored_output(output)
-            status = "done"
-            lowered = output.lower()
-            if "阶段：任务失败" in output or "traceback" in lowered:
-                status = "failed"
-            elif "用户请求停止" in output or "job_stopped_by_user" in lowered:
-                status = "stopped"
-            elif "任务已排队" in output and "任务开始执行" not in output:
-                status = "stopped"
-            elif not output.strip():
-                status = "queued"
-            job_id = raw_job_id
-            if job_id in self._jobs:
-                job_id = f"{raw_job_id}-{timestamp_text}"
-            try:
-                self._counter = max(self._counter, int(counter_text))
-            except Exception:
-                pass
-            job = {
-                "id": job_id,
-                "kind": raw_kind,
-                "status": status,
-                "started_at": started_at,
-                "finished_at": finished_at if status not in {"queued", "running", "stopping"} else "",
-                "result": None,
-                "error": None,
-                "output": self._trim_output(output),
-                "log_path": str(path),
-                "stop_requested": False,
-                "meta": {
-                    "stage": "",
-                    "current_phone": "",
-                },
-            }
+            timestamp_text, raw_job_id, counter_text, raw_kind = parsed
+            output = self._read_restored_output(path)
+            status = self._restored_status(output)
+            job_id = self._restore_job_id(raw_job_id, timestamp_text)
+            self._update_counter_from_restored_job(counter_text)
+            job = self._restored_job(
+                path=path,
+                job_id=job_id,
+                raw_kind=raw_kind,
+                status=status,
+                started_at=self._restored_started_at(timestamp_text),
+                finished_at=self._restored_finished_at(path),
+                output=output,
+            )
             self._update_meta_from_output(job)
-            if status == "failed":
-                job["meta"] = {**(job.get("meta") or {}), "stage": str((job.get("meta") or {}).get("stage") or "任务失败")}
-            elif status == "stopped":
-                stage = str((job.get("meta") or {}).get("stage") or "")
-                if not stage or "任务已排队" in stage or "用户请求停止" in stage:
-                    stage = "任务已停止"
-                job["meta"] = {**(job.get("meta") or {}), "stage": stage}
+            self._apply_restored_status_stage(job, status)
             self._jobs[job_id] = job
 
     def create(self, kind: str) -> str:

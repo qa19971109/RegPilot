@@ -10,12 +10,17 @@ from unittest.mock import patch
 
 from regpilot import accounts_store
 from regpilot import account_inspection as inspection
+from regpilot import account_inspection_cpa_actions
+from regpilot import account_inspection_results
+from regpilot import account_inspection_targets
 from regpilot import api as fastapi_api
+from regpilot import cpa_management
+from regpilot import cpa_usage
 
 
 class AccountInspectionTests(unittest.TestCase):
     def test_unauthorized_account_runs_reauthorize_without_delete_mark(self):
-        payload = fastapi_api.AccountInspectionRequest(account_ids=["acc-1"], codex2api_url="http://cpa.test", codex2api_admin_key="key", use_cpa_test=False)
+        payload = fastapi_api.AccountInspectionRequest(account_ids=["acc-1"], codex2api_url="http://cpa.test", codex2api_admin_key="key", use_cpa_test=False, auto_reauthorize=True)
         account = {"id": "acc-1", "email": "user@example.test", "password": "pw", "mailbox": {"provider": "icloud"}}
         outcome = SimpleNamespace(ok=True, message="CPA callback submitted", account={**account, "status": "authorized"})
 
@@ -32,8 +37,22 @@ class AccountInspectionTests(unittest.TestCase):
         self.assertEqual(result["items"][0]["action"], "reauthorized")
         mock_reauth.assert_called_once()
 
+    def test_unauthorized_account_does_not_reauthorize_when_option_disabled(self):
+        payload = fastapi_api.AccountInspectionRequest(account_ids=["acc-1"], use_cpa_test=False, auto_reauthorize=False)
+        account = {"id": "acc-1", "email": "user@example.test"}
+
+        with patch("regpilot.account_inspection._accounts_for_inspection", return_value=[account]), \
+             patch("regpilot.account_inspection._codex_account_test", return_value={"ok": False, "account_id": "acc-1", "email": "user@example.test", "status_code": 401, "error": "unauthorized"}), \
+             patch("regpilot.account_inspection.auto_reauthorize_account_with_email_otp", side_effect=AssertionError("auto reauthorize is disabled")):
+            result = fastapi_api._run_account_inspection(payload, {})
+
+        self.assertEqual(result["unauthorized_count"], 1)
+        self.assertEqual(result["reauthorized_count"], 0)
+        self.assertEqual(result["items"][0]["action"], "failed_no_reauthorize")
+        self.assertIn("automatic reauthorization is disabled", result["items"][0]["message"])
+
     def test_unauthorized_account_marks_delete_pending_only_for_phone_verification(self):
-        payload = fastapi_api.AccountInspectionRequest(account_ids=["acc-1"], codex2api_url="http://cpa.test", codex2api_admin_key="key", use_cpa_test=False)
+        payload = fastapi_api.AccountInspectionRequest(account_ids=["acc-1"], codex2api_url="http://cpa.test", codex2api_admin_key="key", use_cpa_test=False, auto_reauthorize=True)
         account = {
             "id": "acc-1",
             "email": "user@example.test",
@@ -73,6 +92,85 @@ class AccountInspectionTests(unittest.TestCase):
         self.assertEqual(result["reauthorized_count"], 0)
         self.assertEqual(result["delete_marked_count"], 0)
         self.assertEqual(result["items"][0]["action"], "failed_no_reauthorize")
+
+    def test_inspection_summary_keeps_cpa_keep_neutral(self):
+        summary = inspection._summarize_inspection_items(
+            [
+                {"ok": True, "action": "cpa_usage_available", "status_code": 200},
+                {"ok": False, "action": "cpa_keep", "status_code": 200},
+                {"ok": False, "action": "reauthorized", "status_code": 401},
+                {"ok": False, "action": "delete_pending", "status_code": 401},
+            ]
+        )
+
+        self.assertEqual(summary.checked_count, 4)
+        self.assertEqual(summary.ok_count, 2)
+        self.assertEqual(summary.failed_count, 1)
+        self.assertEqual(summary.unauthorized_count, 2)
+        self.assertEqual(summary.reauthorized_count, 1)
+        self.assertEqual(summary.delete_marked_count, 1)
+
+    def test_account_inspection_results_item_mapping_preserves_usage_fields(self):
+        item = account_inspection_results.inspection_item_from_result(
+            {"id": "acc-1", "email": "user@example.test"},
+            {
+                "ok": False,
+                "auth_index": "codex-1",
+                "auth_name": "user.json",
+                "auth_disabled": True,
+                "usage_state": "limit_reached",
+                "recommended_action": "disable",
+                "weekly_used_percent": 100,
+                "five_hour_used_percent": 12.5,
+                "status_code": 402,
+                "latency_ms": 123,
+                "error": "payment_required",
+                "action": "cpa_usage_limit_reached",
+            },
+        )
+
+        self.assertEqual(item["account_id"], "acc-1")
+        self.assertEqual(item["email"], "user@example.test")
+        self.assertTrue(item["auth_disabled"])
+        self.assertEqual(item["recommended_action"], "disable")
+        self.assertEqual(item["weekly_used_percent"], 100)
+        self.assertEqual(item["five_hour_used_percent"], 12.5)
+        self.assertEqual(item["message"], "payment_required")
+
+    def test_account_inspection_targets_dedupes_selected_ids(self):
+        ids = account_inspection_targets.inspection_account_ids([" acc-1 ", "", "acc-2"], "acc-1")
+
+        self.assertEqual(ids, ["acc-1", "acc-2"])
+
+    def test_account_inspection_targets_loads_selected_accounts_in_order(self):
+        accounts = {
+            "acc-1": {"id": "acc-1"},
+            "acc-2": {"id": "acc-2"},
+        }
+
+        result = account_inspection_targets.accounts_for_inspection(
+            account_ids=["acc-2", "missing"],
+            account_id="acc-1",
+            get_account=lambda account_id: accounts.get(account_id),
+            count_accounts=lambda: 99,
+            list_accounts=lambda **kwargs: [{"id": "all"}],
+        )
+
+        self.assertEqual(result, [{"id": "acc-2"}, {"id": "acc-1"}])
+
+    def test_account_inspection_targets_caps_account_pool_load(self):
+        calls = []
+
+        result = account_inspection_targets.accounts_for_inspection(
+            account_ids=[],
+            account_id="",
+            get_account=lambda account_id: None,
+            count_accounts=lambda: 20000,
+            list_accounts=lambda **kwargs: calls.append(kwargs) or [{"id": "all"}],
+        )
+
+        self.assertEqual(result, [{"id": "all"}])
+        self.assertEqual(calls, [{"limit": 10000, "offset": 0}])
 
     def test_default_inspection_uses_cpa_auth_file_test(self):
         payload = fastapi_api.AccountInspectionRequest(account_ids=["acc-1"], codex2api_url="http://cpa.test", codex2api_admin_key="key", threads=2)
@@ -120,6 +218,69 @@ class AccountInspectionTests(unittest.TestCase):
             files = inspection._cpa_auth_files("http://cpa.test", "key")
 
         self.assertEqual(files, [{"name": "user.json", "auth_index": "codex-1"}])
+
+    def test_cpa_management_auth_files_accepts_request_adapter(self):
+        def fake_request(method, base_url, admin_key, path, **kwargs):
+            self.assertEqual(method, "GET")
+            self.assertEqual(path, "/v0/management/auth-files")
+            return {"files": [{"name": "usage-stats.json"}, {"name": "user.json", "auth_index": "codex-1"}]}
+
+        files = cpa_management.cpa_auth_files("http://cpa.test", "key", request_fn=fake_request)
+
+        self.assertEqual(files, [{"name": "user.json", "auth_index": "codex-1"}])
+
+    def test_cpa_management_auth_file_helpers_match_account_metadata(self):
+        auth_file = {
+            "name": "user_example_test.json",
+            "type": "x_ai",
+            "state": "disabled",
+            "metadata": {"chatgptAccountId": "codex-account-1"},
+        }
+        account = {"id": "acc-1", "email": "user@example.test", "mailbox": {}}
+
+        self.assertEqual(cpa_management.cpa_auth_provider(auth_file), "xai")
+        self.assertTrue(cpa_management.cpa_auth_file_disabled(auth_file))
+        self.assertEqual(cpa_management.cpa_codex_account_id(auth_file), "codex-account-1")
+        self.assertEqual(cpa_management.account_cpa_auth_file(account, [auth_file]), auth_file)
+        self.assertEqual(cpa_management.cpa_auth_file_display_email(auth_file), "user_example_test.json")
+
+    def test_cpa_management_api_call_error_message_parses_body_shapes(self):
+        self.assertEqual(
+            cpa_management.cpa_api_call_error_message(
+                {"status_code": 429, "body": '{"error":{"message":"rate limit"}}'}
+            ),
+            "429 rate limit",
+        )
+        self.assertEqual(
+            cpa_management.cpa_api_call_error_message({"statusCode": 503, "bodyText": "upstream down"}),
+            "503 upstream down",
+        )
+
+    def test_cpa_management_api_call_probe_result_parses_payload_and_error(self):
+        result = cpa_management.cpa_api_call_probe_result(
+            {"statusCode": 200, "body": {"rate_limit": {"weekly": {"used_percent": 12.5}}}}
+        )
+
+        self.assertEqual(result["status_code"], 200)
+        self.assertTrue(result["has_status_code"])
+        self.assertEqual(result["payload"], {"rate_limit": {"weekly": {"used_percent": 12.5}}})
+        self.assertIn("rate_limit", result["body_text"])
+        self.assertEqual(result["error"], "HTTP 200")
+
+    def test_cpa_management_builds_inspection_targets_from_auth_files(self):
+        local = [{"id": "acc-1", "email": "user@example.test", "mailbox": {}}]
+        matched = {"provider": "codex", "name": "user_example_test.json"}
+        cpa_only = {"provider": "codex", "name": "orphan.json", "auth_index": "codex-2"}
+        skipped = {"provider": "x-ai", "name": "xai.json"}
+
+        targets = cpa_management.cpa_inspection_accounts_from_auth_files([matched, cpa_only, skipped], local)
+
+        self.assertEqual(len(targets), 2)
+        self.assertEqual(targets[0]["id"], "acc-1")
+        self.assertEqual(targets[0]["_cpa_auth_file"], matched)
+        self.assertEqual(targets[1]["email"], "orphan.json")
+        self.assertEqual(targets[1]["status"], "cpa_only")
+        self.assertFalse(targets[1]["usable_for_reauth"])
 
     def test_disabled_cpa_auth_file_with_available_weekly_quota_suggests_enable(self):
         payload = fastapi_api.AccountInspectionRequest(codex2api_url="http://cpa.test", codex2api_admin_key="key")
@@ -186,6 +347,17 @@ class AccountInspectionTests(unittest.TestCase):
         self.assertEqual(result["usage_state"], "limit_reached")
         self.assertEqual(result["recommended_action"], "disable")
 
+    def test_cpa_usage_decision_treats_payment_required_as_limit_reached(self):
+        decision = cpa_usage.cpa_usage_decision_from_probe(
+            {"has_status_code": True, "status_code": 402, "payload": {}, "body_text": "payment_required", "error": "payment_required"},
+            was_disabled=False,
+        )
+
+        self.assertFalse(decision.ok)
+        self.assertEqual(decision.action, "cpa_usage_limit_reached")
+        self.assertEqual(decision.usage_state, "limit_reached")
+        self.assertEqual(decision.recommended_action, "disable")
+
     def test_disabled_cpa_auth_file_with_full_weekly_quota_keeps_disabled_without_failure(self):
         payload = fastapi_api.AccountInspectionRequest(codex2api_url="http://cpa.test", codex2api_admin_key="key")
         auth_file = {"auth_index": "codex-1", "name": "disabled.json", "email": "cpa-only@example.test", "status": "disabled"}
@@ -220,7 +392,7 @@ class AccountInspectionTests(unittest.TestCase):
         self.assertEqual(result["items"][0]["recommended_action"], "")
 
     def test_cpa_quota_unauthorized_with_local_account_runs_reauthorize_before_delete(self):
-        payload = fastapi_api.AccountInspectionRequest(account_ids=["acc-1"], codex2api_url="http://cpa.test", codex2api_admin_key="key")
+        payload = fastapi_api.AccountInspectionRequest(account_ids=["acc-1"], codex2api_url="http://cpa.test", codex2api_admin_key="key", auto_reauthorize=True)
         auth_file = {"auth_index": "codex-1", "name": "user.json", "email": "user@example.test"}
         account = {"id": "acc-1", "email": "user@example.test", "_cpa_auth_file": auth_file}
         outcome = SimpleNamespace(ok=True, message="CPA callback submitted", account={**account, "status": "authorized"})
@@ -237,7 +409,7 @@ class AccountInspectionTests(unittest.TestCase):
         mock_reauth.assert_called_once()
 
     def test_cpa_quota_unauthorized_reauthorize_runs_serially_to_reduce_risk(self):
-        payload = fastapi_api.AccountInspectionRequest(account_ids=["acc-1", "acc-2"], codex2api_url="http://cpa.test", codex2api_admin_key="key", threads=2)
+        payload = fastapi_api.AccountInspectionRequest(account_ids=["acc-1", "acc-2"], codex2api_url="http://cpa.test", codex2api_admin_key="key", threads=2, auto_reauthorize=True)
         auth_files = [
             {"auth_index": "codex-1", "name": "one.json", "email": "one@example.test"},
             {"auth_index": "codex-2", "name": "two.json", "email": "two@example.test"},
@@ -273,6 +445,39 @@ class AccountInspectionTests(unittest.TestCase):
         self.assertEqual(result["reauthorized_count"], 2)
         self.assertEqual(max_active, 1)
 
+    def test_cpa_action_module_resolves_target_from_account(self):
+        auth_file = {"auth_index": "codex-1", "name": "user.json"}
+        target = account_inspection_cpa_actions.resolve_cpa_action_target(
+            account_id="acc-1",
+            auth_index="",
+            name="",
+            auth_files=[auth_file],
+            get_account=lambda account_id: {"id": account_id, "email": "user@example.test"},
+            account_cpa_auth_file=lambda account, auth_files: auth_files[0],
+        )
+
+        self.assertEqual(target, {"auth_index": "codex-1", "name": "user.json"})
+
+    def test_cpa_action_module_delete_quotes_name_and_reports_local_delete(self):
+        calls = []
+        context = account_inspection_cpa_actions.CpaAuthActionContext(
+            action="delete",
+            cpa_url="http://cpa.test",
+            cpa_key="key",
+            auth_index="codex-1",
+            name="user file.json",
+        )
+
+        result = account_inspection_cpa_actions.run_cpa_auth_delete_action(
+            context=context,
+            account_id="acc-1",
+            cpa_request=lambda method, base_url, admin_key, path, **kwargs: calls.append((method, path)) or {"ok": True},
+            delete_account=lambda account_id: account_id == "acc-1",
+        )
+
+        self.assertTrue(result["local_account_deleted"])
+        self.assertEqual(calls, [("DELETE", "/v0/management/auth-files?name=user%20file.json")])
+
     def test_cpa_action_disable_calls_management_status_endpoint(self):
         payload = fastapi_api.AccountInspectionCpaActionRequest(action="disable", auth_index="codex-1", name="user.json", codex2api_url="http://cpa.test", codex2api_admin_key="key")
         calls = []
@@ -291,6 +496,27 @@ class AccountInspectionTests(unittest.TestCase):
         self.assertEqual(calls[-1][0], "PATCH")
         self.assertEqual(calls[-1][3], "/v0/management/auth-files/status")
         self.assertEqual(calls[-1][4], {"name": "user.json", "disabled": True})
+
+    def test_cpa_action_enable_updates_matching_local_account_status(self):
+        payload = fastapi_api.AccountInspectionCpaActionRequest(action="enable", account_id="acc-1", auth_index="codex-1", name="user.json", codex2api_url="http://cpa.test", codex2api_admin_key="key")
+        account = {"id": "acc-1", "email": "user@example.test", "status": "cpa_disabled", "last_error": "cpa_auth_disabled"}
+
+        def fake_request(method, base_url, admin_key, path, **kwargs):
+            if method == "GET":
+                return {"files": [{"auth_index": "codex-1", "name": "user.json"}]}
+            return {"status": "ok", "disabled": False}
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmpdir, \
+             patch.object(accounts_store, "DB_PATH", Path(tmpdir) / "accounts.db"), \
+             patch("regpilot.account_inspection._cpa_request", side_effect=fake_request):
+            accounts_store.upsert_account(account)
+            result = fastapi_api.api_account_inspection_cpa_action(payload)
+            saved = accounts_store.get_account("acc-1")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["action"], "enable")
+        self.assertEqual((saved or {}).get("status"), "authorized")
+        self.assertEqual((saved or {}).get("last_error"), "")
 
     def test_cpa_action_delete_removes_matching_local_account_after_cpa_delete(self):
         payload = fastapi_api.AccountInspectionCpaActionRequest(action="delete", account_id="acc-1", auth_index="codex-1", name="user.json", codex2api_url="http://cpa.test", codex2api_admin_key="key")
@@ -351,9 +577,13 @@ class AccountInspectionTests(unittest.TestCase):
         self.assertIn("/api/accounts/inspection/job", html)
         self.assertIn("/api/accounts/inspection/cpa-action", html)
         self.assertIn('id="inspection_threads"', html)
+        self.assertIn('id="inspection_auto_reauthorize"', html)
+        self.assertIn("auto_reauthorize:checked('inspection_auto_reauthorize')", html)
         self.assertIn("saveInspectionThreadConfig", html)
         self.assertIn("regpilot-inspection-threads", html)
         self.assertIn("inspection_threads:threads", html)
+        self.assertIn("set('inspection_threads',normalizeInspectionThreads", html)
+        self.assertNotIn("baseLoadDefaults", html)
         self.assertNotIn('id="inspection_codex2api_url"', html)
         self.assertNotIn('id="inspection_codex2api_admin_key"', html)
         self.assertNotIn('id="inspection_codex2api_proxy_url"', html)
@@ -367,6 +597,23 @@ class AccountInspectionTests(unittest.TestCase):
         self.assertIn("cpa_disabled:'CPA 禁用'", html)
         self.assertIn("account_inspection:'账户巡检'", html)
         self.assertIn("inspectionMessageText", html)
+        self.assertIn("inspectionStatusSummaryItems", html)
+        self.assertIn("inspectionSourceText", html)
+        self.assertIn("inspectionStatusView", html)
+        self.assertIn("renderInspectionStatusPanel", html)
+        self.assertIn("renderStatusSummaryGrid(view.summary)", html)
+        self.assertIn("inspectionRowState", html)
+        self.assertIn("renderInspectionSuggestedAction", html)
+        self.assertIn("renderInspectionCpaActions", html)
+        self.assertIn("renderInspectionRow", html)
+        self.assertIn("async function cpaAuthActionForRow", html)
+        self.assertIn("function inspectionActionText", html)
+        self.assertIn("function isInspectionVisibleAction", html)
+        self.assertIn("function renderInspectionRows", html)
+        self.assertIn("inspectionExecutableRecommendationRows", html)
+        self.assertIn("executeInspectionRecommendationItem", html)
+        self.assertIn("inspectionRecommendationResultText", html)
+        self.assertIn("renderInspectionRecommendationResult", html)
         self.assertIn("executeInspectionRecommendations()", html)
         self.assertNotIn("data-inspection-execute-all", html)
         self.assertIn("skipConfirm:true", html)
@@ -381,6 +628,10 @@ class AccountInspectionTests(unittest.TestCase):
         self.assertIn('colspan="9"', html)
         self.assertIn("name==='delete'&&recommended==='delete'", html)
         self.assertIn(".danger", html)
+        self.assertNotIn("cpaAuthActionForRow=async function", html)
+        self.assertNotIn("inspectionActionText=function", html)
+        self.assertNotIn("isInspectionVisibleAction=function", html)
+        self.assertNotIn("renderInspectionRows=function", html)
 
 
     def test_webui_inspection_table_filters_keep_rows(self):

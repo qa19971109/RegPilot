@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -101,7 +102,15 @@ from .account_inspection import (
     _run_account_inspection,
     _run_cpa_auth_action,
 )
-app = FastAPI(title="RegPilot API", version="0.1.0")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+
+
+app = FastAPI(title="RegPilot API", version="0.1.0", lifespan=lifespan)
 app.include_router(config_router)
 app.include_router(microsoft_mail_router)
 app.include_router(task_router)
@@ -117,15 +126,6 @@ def main() -> None:
     import uvicorn
 
     uvicorn.run("regpilot.api:app", host=args.host, port=args.port)
-
-
-
-
-@app.on_event("startup")
-def on_startup() -> None:
-    init_db()
-
-
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
     return FASTAPI_INDEX_HTML

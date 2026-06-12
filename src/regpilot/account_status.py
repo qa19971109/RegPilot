@@ -4,17 +4,17 @@ import json
 import time
 from typing import Any
 
+from . import api_config_values
 from .api_presenters import _redact_sensitive
-from .api_tasks import _load_webui_config as _load_webui_config_with_defaults
 from .config import DATA_DIR
-from .register_core import _decode_jwt_payload
+from .jwt_utils import decode_jwt_payload as _decode_jwt_payload
 
 
 _PHONE_REUSE_POOL_CACHE: dict[str, Any] = {"mtime": None, "data": {}}
 
 
 def _load_webui_config() -> dict[str, Any]:
-    return _load_webui_config_with_defaults()
+    return api_config_values._load_webui_config()
 
 
 def _load_phone_reuse_pool_cached() -> dict[str, Any]:

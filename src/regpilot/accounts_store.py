@@ -147,76 +147,92 @@ def get_account(account_id: str) -> dict[str, Any] | None:
     return _row_to_account(row) if row else None
 
 
+_UPSERT_ACCOUNT_SQL = """
+    INSERT INTO accounts (
+        id, email, password, status, source, created_at, updated_at,
+        last_auth_at, last_sub2api_submit_at, last_error, callback_url,
+        access_token, refresh_token, id_token, mailbox_json, notes, tags_json, usable_for_reauth
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+        email=excluded.email,
+        password=excluded.password,
+        status=excluded.status,
+        source=excluded.source,
+        updated_at=excluded.updated_at,
+        last_auth_at=excluded.last_auth_at,
+        last_sub2api_submit_at=excluded.last_sub2api_submit_at,
+        last_error=excluded.last_error,
+        callback_url=excluded.callback_url,
+        access_token=excluded.access_token,
+        refresh_token=excluded.refresh_token,
+        id_token=excluded.id_token,
+        mailbox_json=excluded.mailbox_json,
+        notes=excluded.notes,
+        tags_json=excluded.tags_json,
+        usable_for_reauth=excluded.usable_for_reauth
+    """
+
+
+def _stored_account_text(record: dict[str, Any], key: str, default: str = "") -> str:
+    return str(record.get(key) if key in record else default or "")
+
+
+def _stored_account_secret(record: dict[str, Any], existing: dict[str, Any] | None, key: str) -> str:
+    raw = str(record.get(key) or "")
+    if existing and (key not in record or raw in {"", "***"}):
+        return str(existing.get(key) or "")
+    return raw
+
+
+def _stored_existing_when_missing(
+    record: dict[str, Any],
+    existing: dict[str, Any] | None,
+    key: str,
+    default: str = "",
+) -> str:
+    if existing and key not in record:
+        return str(existing.get(key) or "")
+    return str(record.get(key) or default)
+
+
+def _upsert_account_values(
+    record: dict[str, Any],
+    existing: dict[str, Any] | None,
+    account_id: str,
+    created_at: str,
+    now: str,
+) -> tuple[Any, ...]:
+    return (
+        account_id,
+        str(record.get("email") or "").strip(),
+        _stored_account_secret(record, existing, "password"),
+        str(record.get("status") or "active"),
+        str(record.get("source") or "register"),
+        created_at,
+        now,
+        _stored_existing_when_missing(record, existing, "last_auth_at"),
+        _stored_existing_when_missing(record, existing, "last_sub2api_submit_at"),
+        _stored_existing_when_missing(record, existing, "last_error"),
+        _stored_account_secret(record, existing, "callback_url"),
+        _stored_account_secret(record, existing, "access_token"),
+        _stored_account_secret(record, existing, "refresh_token"),
+        _stored_account_secret(record, existing, "id_token"),
+        json.dumps(record.get("mailbox") or {}, ensure_ascii=False),
+        _stored_account_text(record, "notes"),
+        json.dumps(record.get("tags") or [], ensure_ascii=False),
+        1 if bool(record.get("usable_for_reauth", True)) else 0,
+    )
+
+
 def upsert_account(record: dict[str, Any]) -> dict[str, Any]:
     init_db()
     account_id = str(record.get("id") or uuid.uuid4().hex)
     now = _utc_now_iso()
     existing = get_account(account_id)
     created_at = str((existing or {}).get("created_at") or now)
-    mailbox_json = json.dumps(record.get("mailbox") or {}, ensure_ascii=False)
-    tags_json = json.dumps(record.get("tags") or [], ensure_ascii=False)
-
-    def stored_text(key: str, default: str = "") -> str:
-        return str(record.get(key) if key in record else default or "")
-
-    def stored_secret_text(key: str) -> str:
-        raw = str(record.get(key) or "")
-        if existing and (key not in record or raw in {"", "***"}):
-            return str(existing.get(key) or "")
-        return raw
-
-    def stored_existing_when_missing(key: str, default: str = "") -> str:
-        if existing and key not in record:
-            return str(existing.get(key) or "")
-        return str(record.get(key) or default)
-
+    values = _upsert_account_values(record, existing, account_id, created_at, now)
     with connect_db() as conn:
-        conn.execute(
-            """
-            INSERT INTO accounts (
-                id, email, password, status, source, created_at, updated_at,
-                last_auth_at, last_sub2api_submit_at, last_error, callback_url,
-                access_token, refresh_token, id_token, mailbox_json, notes, tags_json, usable_for_reauth
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                email=excluded.email,
-                password=excluded.password,
-                status=excluded.status,
-                source=excluded.source,
-                updated_at=excluded.updated_at,
-                last_auth_at=excluded.last_auth_at,
-                last_sub2api_submit_at=excluded.last_sub2api_submit_at,
-                last_error=excluded.last_error,
-                callback_url=excluded.callback_url,
-                access_token=excluded.access_token,
-                refresh_token=excluded.refresh_token,
-                id_token=excluded.id_token,
-                mailbox_json=excluded.mailbox_json,
-                notes=excluded.notes,
-                tags_json=excluded.tags_json,
-                usable_for_reauth=excluded.usable_for_reauth
-            """,
-            (
-                account_id,
-                str(record.get("email") or "").strip(),
-                stored_secret_text("password"),
-                str(record.get("status") or "active"),
-                str(record.get("source") or "register"),
-                created_at,
-                now,
-                stored_existing_when_missing("last_auth_at"),
-                stored_existing_when_missing("last_sub2api_submit_at"),
-                stored_existing_when_missing("last_error"),
-                stored_secret_text("callback_url"),
-                stored_secret_text("access_token"),
-                stored_secret_text("refresh_token"),
-                stored_secret_text("id_token"),
-                mailbox_json,
-                stored_text("notes"),
-                tags_json,
-                1 if bool(record.get("usable_for_reauth", True)) else 0,
-            ),
-        )
+        conn.execute(_UPSERT_ACCOUNT_SQL, values)
         conn.commit()
     return get_account(account_id) or {"id": account_id}
 

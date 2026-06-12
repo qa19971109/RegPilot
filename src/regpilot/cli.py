@@ -44,8 +44,8 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def load_config(args: argparse.Namespace) -> RegisterConfig:
-    cfg = RegisterConfig(
+def _config_from_cli_args(args: argparse.Namespace) -> RegisterConfig:
+    return RegisterConfig(
         proxy=args.proxy,
         env_random_enabled=parse_bool(getattr(args, "env_random_enabled", None), default=False, key="env_random_enabled"),
         env_proxy_pool=str(getattr(args, "env_proxy_pool", "") or ""),
@@ -73,37 +73,38 @@ def load_config(args: argparse.Namespace) -> RegisterConfig:
         reuse_phone_number=str(getattr(args, "reuse_phone_number", "") or ""),
         reuse_activation_id=str(getattr(args, "reuse_activation_id", "") or ""),
     )
-    config_path = str(getattr(args, "config", "") or "").strip()
-    if not config_path:
-        return cfg
-    data = json.loads(Path(config_path).read_text(encoding="utf-8"))
+
+
+def _config_from_json_data(data: dict[str, object], base: RegisterConfig) -> RegisterConfig:
     mail_data = data.get("mail") or {}
-    cfg = RegisterConfig(
-        proxy=str(data.get("proxy") or cfg.proxy),
-        env_random_enabled=parse_bool(data.get("env_random_enabled", cfg.env_random_enabled), default=cfg.env_random_enabled, key="env_random_enabled"),
-        env_proxy_pool=str(data.get("env_proxy_pool") or cfg.env_proxy_pool),
-        env_ua_pool=str(data.get("env_ua_pool") or cfg.env_ua_pool),
-        env_accept_language_pool=str(data.get("env_accept_language_pool") or cfg.env_accept_language_pool),
-        env_timezone_pool=str(data.get("env_timezone_pool") or cfg.env_timezone_pool),
-        env_viewport_pool=str(data.get("env_viewport_pool") or cfg.env_viewport_pool),
-        total=max(1, int(data.get("total") or cfg.total)),
-        threads=max(1, int(data.get("threads") or cfg.threads)),
-        codex2api_url=str(data.get("codex2api_url") or cfg.codex2api_url),
-        codex2api_admin_key=str(data.get("codex2api_admin_key") or cfg.codex2api_admin_key),
-        codex2api_proxy_url=str(data.get("codex2api_proxy_url") or cfg.codex2api_proxy_url),
-        codex2api_auto_import=parse_bool(data.get("codex2api_auto_import", cfg.codex2api_auto_import), default=cfg.codex2api_auto_import, key="codex2api_auto_import"),
-        hero_sms_api_key=str(data.get("hero_sms_api_key") or cfg.hero_sms_api_key),
-        hero_sms_base_url=str(data.get("hero_sms_base_url") or cfg.hero_sms_base_url),
-        hero_sms_country=str(data.get("hero_sms_country") or cfg.hero_sms_country),
-        hero_sms_service=str(data.get("hero_sms_service") or cfg.hero_sms_service),
-        hero_sms_min_price=float(data.get("hero_sms_min_price") or cfg.hero_sms_min_price),
-        hero_sms_max_price=float(data.get("hero_sms_max_price") or cfg.hero_sms_max_price),
-        hero_sms_wait_timeout=int(data.get("sms_wait_timeout") or data.get("hero_sms_wait_timeout") or cfg.hero_sms_wait_timeout),
-        hero_sms_wait_interval=int(data.get("sms_wait_interval") or data.get("hero_sms_wait_interval") or cfg.hero_sms_wait_interval),
-        hero_sms_auto_retry=parse_bool(data.get("sms_auto_retry", data.get("hero_sms_auto_retry", cfg.hero_sms_auto_retry)), default=cfg.hero_sms_auto_retry, key="hero_sms_auto_retry"),
-        hero_sms_retry_count=max(1, int(data.get("sms_retry_count") or data.get("hero_sms_retry_count") or cfg.hero_sms_retry_count)),
-        reuse_phone_number=str(data.get("reuse_phone_number") or cfg.reuse_phone_number),
-        reuse_activation_id=str(data.get("reuse_activation_id") or cfg.reuse_activation_id),
+    if not isinstance(mail_data, dict):
+        mail_data = {}
+    return RegisterConfig(
+        proxy=str(data.get("proxy") or base.proxy),
+        env_random_enabled=parse_bool(data.get("env_random_enabled", base.env_random_enabled), default=base.env_random_enabled, key="env_random_enabled"),
+        env_proxy_pool=str(data.get("env_proxy_pool") or base.env_proxy_pool),
+        env_ua_pool=str(data.get("env_ua_pool") or base.env_ua_pool),
+        env_accept_language_pool=str(data.get("env_accept_language_pool") or base.env_accept_language_pool),
+        env_timezone_pool=str(data.get("env_timezone_pool") or base.env_timezone_pool),
+        env_viewport_pool=str(data.get("env_viewport_pool") or base.env_viewport_pool),
+        total=max(1, int(data.get("total") or base.total)),
+        threads=max(1, int(data.get("threads") or base.threads)),
+        codex2api_url=str(data.get("codex2api_url") or base.codex2api_url),
+        codex2api_admin_key=str(data.get("codex2api_admin_key") or base.codex2api_admin_key),
+        codex2api_proxy_url=str(data.get("codex2api_proxy_url") or base.codex2api_proxy_url),
+        codex2api_auto_import=parse_bool(data.get("codex2api_auto_import", base.codex2api_auto_import), default=base.codex2api_auto_import, key="codex2api_auto_import"),
+        hero_sms_api_key=str(data.get("hero_sms_api_key") or base.hero_sms_api_key),
+        hero_sms_base_url=str(data.get("hero_sms_base_url") or base.hero_sms_base_url),
+        hero_sms_country=str(data.get("hero_sms_country") or base.hero_sms_country),
+        hero_sms_service=str(data.get("hero_sms_service") or base.hero_sms_service),
+        hero_sms_min_price=float(data.get("hero_sms_min_price") or base.hero_sms_min_price),
+        hero_sms_max_price=float(data.get("hero_sms_max_price") or base.hero_sms_max_price),
+        hero_sms_wait_timeout=int(data.get("sms_wait_timeout") or data.get("hero_sms_wait_timeout") or base.hero_sms_wait_timeout),
+        hero_sms_wait_interval=int(data.get("sms_wait_interval") or data.get("hero_sms_wait_interval") or base.hero_sms_wait_interval),
+        hero_sms_auto_retry=parse_bool(data.get("sms_auto_retry", data.get("hero_sms_auto_retry", base.hero_sms_auto_retry)), default=base.hero_sms_auto_retry, key="hero_sms_auto_retry"),
+        hero_sms_retry_count=max(1, int(data.get("sms_retry_count") or data.get("hero_sms_retry_count") or base.hero_sms_retry_count)),
+        reuse_phone_number=str(data.get("reuse_phone_number") or base.reuse_phone_number),
+        reuse_activation_id=str(data.get("reuse_activation_id") or base.reuse_activation_id),
         mail=MailConfig(
             request_timeout=int(mail_data.get("request_timeout") or 30),
             wait_timeout=int(mail_data.get("wait_timeout") or 30),
@@ -112,6 +113,9 @@ def load_config(args: argparse.Namespace) -> RegisterConfig:
             proxy=str(mail_data.get("proxy") or ""),
         ),
     )
+
+
+def _apply_cli_overrides(cfg: RegisterConfig, args: argparse.Namespace) -> RegisterConfig:
     if args.proxy:
         cfg.proxy = args.proxy
     if getattr(args, "env_random_enabled", None) is not None:
@@ -163,6 +167,17 @@ def load_config(args: argparse.Namespace) -> RegisterConfig:
     if getattr(args, "reuse_activation_id", ""):
         cfg.reuse_activation_id = str(args.reuse_activation_id)
     return cfg
+
+
+def load_config(args: argparse.Namespace) -> RegisterConfig:
+    cfg = _config_from_cli_args(args)
+    config_path = str(getattr(args, "config", "") or "").strip()
+    if not config_path:
+        return cfg
+    data = json.loads(Path(config_path).read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        data = {}
+    return _apply_cli_overrides(_config_from_json_data(data, cfg), args)
 
 
 def run_register_command(args: argparse.Namespace) -> None:

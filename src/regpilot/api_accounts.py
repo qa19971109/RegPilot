@@ -10,7 +10,8 @@ from .accounts_store import count_accounts, delete_account, delete_accounts, get
 from .account_status import _account_phone_status, _safe_account_with_status
 from .api_config_values import _prefer_proxy
 from .api_models import AccountDeleteRequest, AccountUpsertRequest
-from .register_core import _decode_jwt_payload, auth_base, platform_oauth_client_id
+from .jwt_utils import decode_jwt_payload as _decode_jwt_payload
+from .register_core import auth_base, platform_oauth_client_id
 
 
 router = APIRouter()

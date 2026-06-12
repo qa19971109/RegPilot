@@ -1,18 +1,33 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
-from .oauth_token_flow import (
-    FIVESIM_BASE_URL,
-    HERO_SMS_MAX_RETRY_COUNT,
-    HERO_SMS_RELEASE_AFTER_SECONDS,
-    HERO_SMS_RESEND_AFTER_SECONDS,
-    HERO_SMS_TIMEOUT_AFTER_RESEND_SECONDS,
-    HeroSMSConfig,
-    SMSBOWER_BASE_URL,
-)
-
 HERO_SMS_BASE_URL = "https://hero-sms.com/stubs/handler_api.php"
+SMSBOWER_BASE_URL = "https://smsbower.page/stubs/handler_api.php"
+FIVESIM_BASE_URL = "https://5sim.net/v1"
+HERO_SMS_RESEND_AFTER_SECONDS = 30
+HERO_SMS_TIMEOUT_AFTER_RESEND_SECONDS = 60
+HERO_SMS_RELEASE_AFTER_SECONDS = 120
+HERO_SMS_MAX_RETRY_COUNT = 3
+
+
+@dataclass
+class HeroSMSConfig:
+    provider: str = "hero_sms"
+    api_key: str = ""
+    base_url: str = HERO_SMS_BASE_URL
+    country: str = "16"
+    service: str = "dr"
+    min_price: float = 0.0
+    max_price: float = 0.05
+    wait_timeout: int = 60
+    wait_interval: int = 5
+    auto_retry: bool = False
+    resend_after_seconds: int = HERO_SMS_RESEND_AFTER_SECONDS
+    timeout_after_resend_seconds: int = HERO_SMS_TIMEOUT_AFTER_RESEND_SECONDS
+    release_after_seconds: int = HERO_SMS_RELEASE_AFTER_SECONDS
+    max_retry_count: int = HERO_SMS_MAX_RETRY_COUNT
 
 
 def normalize_sms_provider(value: Any, *, default: str = "hero_sms", strict: bool = True) -> str:

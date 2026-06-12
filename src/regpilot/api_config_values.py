@@ -82,70 +82,93 @@ def _prefer_codex2api_proxy_url(explicit: str) -> str:
     return str(explicit or "").strip() or _config_value("codex2api_proxy_url")
 
 
-def _prefer_reauthorize_sms_values(payload: Any) -> dict[str, Any]:
-    data = _load_webui_config()
+def _merged_reauthorize_sms_config(data: dict[str, Any]) -> dict[str, Any]:
     register_cfg = data.get("register") if isinstance(data.get("register"), dict) else {}
     phone_cfg = data.get("phone_direct") if isinstance(data.get("phone_direct"), dict) else {}
     if not phone_cfg:
         phone_cfg = data.get("hero_phone_bind") if isinstance(data.get("hero_phone_bind"), dict) else {}
-    merged: dict[str, Any] = {**register_cfg, **phone_cfg}
+    return {**register_cfg, **phone_cfg}
 
-    def explicit_value(key: str) -> Any:
-        explicit = getattr(payload, key, None)
-        if explicit not in (None, ""):
-            return explicit
-        return None
 
-    def config_value(key: str) -> Any:
-        value = merged.get(key)
-        if value not in (None, ""):
-            return value
-        return None
+def _not_blank(value: Any) -> Any:
+    return value if value not in (None, "") else None
 
-    def pick(key: str, default: Any = "") -> Any:
-        explicit = explicit_value(key)
+
+def _payload_value(payload: Any, key: str) -> Any:
+    return _not_blank(getattr(payload, key, None))
+
+
+def _config_pick(payload: Any, merged: dict[str, Any], key: str, default: Any = "") -> Any:
+    explicit = _payload_value(payload, key)
+    if explicit is not None:
+        return explicit
+    value = _not_blank(merged.get(key))
+    if value is not None:
+        return value
+    return default
+
+
+def _config_pick_renamed(payload: Any, merged: dict[str, Any], new_key: str, old_key: str, default: Any) -> Any:
+    for key in (new_key, old_key):
+        explicit = _payload_value(payload, key)
         if explicit is not None:
             return explicit
-        value = config_value(key)
+    for key in (new_key, old_key):
+        value = _not_blank(merged.get(key))
         if value is not None:
             return value
-        return default
+    return default
 
-    def pick_renamed(new_key: str, old_key: str, default: Any) -> Any:
-        for key in (new_key, old_key):
-            explicit = explicit_value(key)
-            if explicit is not None:
-                return explicit
-        for key in (new_key, old_key):
-            value = config_value(key)
-            if value is not None:
-                return value
-        return default
 
-    provider = _sms_provider_for_values({"sms_provider": pick("sms_provider", "hero_sms")})
-    hero_key = str(pick("hero_sms_api_key", "") or "").strip()
-    bower_key = str(pick("smsbower_api_key", "") or "").strip()
-    fivesim_key = str(pick("fivesim_api_key", "") or "").strip()
+def _reauthorize_sms_provider_keys(payload: Any, merged: dict[str, Any]) -> tuple[str, str, str, str, str]:
+    provider = _sms_provider_for_values({"sms_provider": _config_pick(payload, merged, "sms_provider", "hero_sms")})
+    hero_key = str(_config_pick(payload, merged, "hero_sms_api_key", "") or "").strip()
+    bower_key = str(_config_pick(payload, merged, "smsbower_api_key", "") or "").strip()
+    fivesim_key = str(_config_pick(payload, merged, "fivesim_api_key", "") or "").strip()
     api_key = sms_api_key_from_values(
         {
             "sms_provider": provider,
-            "sms_api_key": pick("sms_api_key", ""),
+            "sms_api_key": _config_pick(payload, merged, "sms_api_key", ""),
             "hero_sms_api_key": hero_key,
             "smsbower_api_key": bower_key,
             "fivesim_api_key": fivesim_key,
         },
         provider,
     )
-    bounds = {
-        "sms_wait_timeout": pick_renamed("sms_wait_timeout", "hero_sms_wait_timeout", 60),
-        "sms_wait_interval": pick_renamed("sms_wait_interval", "hero_sms_wait_interval", 5),
-        "sms_resend_after_seconds": pick_renamed("sms_resend_after_seconds", "hero_sms_resend_after_seconds", 30),
-        "sms_timeout_after_resend_seconds": pick_renamed("sms_timeout_after_resend_seconds", "hero_sms_timeout_after_resend_seconds", 60),
-        "sms_release_after_seconds": pick_renamed("sms_release_after_seconds", "hero_sms_release_after_seconds", 120),
-        "sms_retry_count": pick_renamed("sms_retry_count", "hero_sms_retry_count", 3),
-        "hero_sms_min_price": pick("hero_sms_min_price", 0.0),
-        "hero_sms_max_price": pick("hero_sms_max_price", 0.0),
+    return provider, api_key, hero_key, bower_key, fivesim_key
+
+
+def _reauthorize_sms_bounds(payload: Any, merged: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "sms_wait_timeout": _config_pick_renamed(payload, merged, "sms_wait_timeout", "hero_sms_wait_timeout", 60),
+        "sms_wait_interval": _config_pick_renamed(payload, merged, "sms_wait_interval", "hero_sms_wait_interval", 5),
+        "sms_resend_after_seconds": _config_pick_renamed(payload, merged, "sms_resend_after_seconds", "hero_sms_resend_after_seconds", 30),
+        "sms_timeout_after_resend_seconds": _config_pick_renamed(payload, merged, "sms_timeout_after_resend_seconds", "hero_sms_timeout_after_resend_seconds", 60),
+        "sms_release_after_seconds": _config_pick_renamed(payload, merged, "sms_release_after_seconds", "hero_sms_release_after_seconds", 120),
+        "sms_retry_count": _config_pick_renamed(payload, merged, "sms_retry_count", "hero_sms_retry_count", 3),
+        "hero_sms_min_price": _config_pick(payload, merged, "hero_sms_min_price", 0.0),
+        "hero_sms_max_price": _config_pick(payload, merged, "hero_sms_max_price", 0.0),
     }
+
+
+def _reauthorize_sms_country(payload: Any, merged: dict[str, Any], provider: str) -> str:
+    country = str(_config_pick(payload, merged, "hero_sms_country", "16") or "16").strip()
+    if provider == "5sim" and (not country or country.isdigit()):
+        return "england"
+    return country
+
+
+def _reauthorize_sms_service(payload: Any, merged: dict[str, Any], provider: str) -> str:
+    service = str(_config_pick(payload, merged, "hero_sms_service", "dr") or "dr").strip()
+    if provider == "5sim" and service in {"", "dr"}:
+        return "openai"
+    return service
+
+
+def _prefer_reauthorize_sms_values(payload: Any) -> dict[str, Any]:
+    merged = _merged_reauthorize_sms_config(_load_webui_config())
+    provider, api_key, hero_key, bower_key, fivesim_key = _reauthorize_sms_provider_keys(payload, merged)
+    bounds = _reauthorize_sms_bounds(payload, merged)
     wait_timeout = _positive_int_for_values(bounds, "sms_wait_timeout")
     wait_interval = _positive_int_for_values(bounds, "sms_wait_interval")
     resend_after = _positive_int_for_values(bounds, "sms_resend_after_seconds")
@@ -162,18 +185,10 @@ def _prefer_reauthorize_sms_values(payload: Any) -> dict[str, Any]:
         "hero_sms_api_key": hero_key,
         "smsbower_api_key": bower_key,
         "fivesim_api_key": fivesim_key,
-        "hero_sms_base_url": str(pick("hero_sms_base_url", "") or "").strip(),
-        "smsbower_base_url": str(pick("smsbower_base_url", "") or "").strip(),
-        "hero_sms_country": (
-            "england"
-            if provider == "5sim" and (not str(pick("hero_sms_country", "") or "").strip() or str(pick("hero_sms_country", "") or "").strip().isdigit())
-            else str(pick("hero_sms_country", "16") or "16").strip()
-        ),
-        "hero_sms_service": (
-            "openai"
-            if provider == "5sim" and str(pick("hero_sms_service", "dr") or "dr").strip() in {"", "dr"}
-            else str(pick("hero_sms_service", "dr") or "dr").strip()
-        ),
+        "hero_sms_base_url": str(_config_pick(payload, merged, "hero_sms_base_url", "") or "").strip(),
+        "smsbower_base_url": str(_config_pick(payload, merged, "smsbower_base_url", "") or "").strip(),
+        "hero_sms_country": _reauthorize_sms_country(payload, merged, provider),
+        "hero_sms_service": _reauthorize_sms_service(payload, merged, provider),
         "hero_sms_min_price": min_price,
         "hero_sms_max_price": max_price,
         "sms_wait_timeout": wait_timeout,
@@ -182,7 +197,7 @@ def _prefer_reauthorize_sms_values(payload: Any) -> dict[str, Any]:
         "sms_timeout_after_resend_seconds": timeout_after_resend,
         "sms_release_after_seconds": release_after,
         "sms_auto_retry": _bool_for_values(
-            {"sms_auto_retry": pick_renamed("sms_auto_retry", "hero_sms_auto_retry", False)},
+            {"sms_auto_retry": _config_pick_renamed(payload, merged, "sms_auto_retry", "hero_sms_auto_retry", False)},
             "sms_auto_retry",
         ),
         "sms_retry_count": retry_count,

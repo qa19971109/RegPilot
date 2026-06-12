@@ -286,6 +286,22 @@ Account inspection notes:
 - Deleting a CPA auth file from the inspection page also deletes the matching local account from the RegPilot account pool when an account id is available.
 - One-click suggested actions show a final execution summary and hide successfully processed rows from the current inspection list.
 
+Account inspection quick start:
+
+1. Configure CPA address, CPA management key, and optional OAuth proxy on the registration page.
+2. Open Account inspection and set the thread count for CPA usage probing.
+3. Enable "auto reauthorize on 401" only when RegPilot should try the stored account password and mailbox flow automatically.
+4. Start inspection. The result table only shows accounts that need an action: enable, disable, delete, or manual follow-up.
+5. Use the per-row action buttons for manual control, or use one-click suggested actions to execute all current suggestions and get a final summary.
+
+Recommended-action behavior:
+
+- Weekly quota available on a disabled CPA auth file -> suggest enable.
+- Weekly quota exhausted on an enabled CPA auth file -> suggest disable.
+- 401 with a matching local account -> optionally reauthorize, then probe again.
+- 401 without a matching local account -> suggest deleting the unmatched CPA auth file.
+- Reauthorization that reaches phone second verification -> mark pending deletion.
+
 ## Config Example
 
 CPA settings use the existing `codex2api_*` config keys for compatibility with the running WebUI and stored config.
